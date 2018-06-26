@@ -26,6 +26,8 @@ def _build_dataset(filepaths_dataset, batch_size=32, resizeto=None, cropto=None,
             dset = dset.apply(tf.contrib.data.shuffle_and_repeat(buffer))
         else:
             dset = dset.shuffle(buffer, reshuffle_each_iteration=True)
+    elif repeat:
+        dset = dset.repeat()
 
     if isinstance(resizeto, int):
         resizeto = [resizeto, resizeto]
