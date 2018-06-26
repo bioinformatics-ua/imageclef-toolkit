@@ -1,6 +1,6 @@
+#!/usr/bin/env python3
 """Trainer of GANs with an auto-encoding process."""
 
-#!/usr/bin/env python3
 from os import makedirs, path
 from sys import exit
 import tensorflow as tf
@@ -10,19 +10,20 @@ from tensorflow.contrib import gan as tfgan
 from dataset_imageclef import get_dataset_dir
 from util import image_summaries_generated, image_grid_summary, random_noise, upsample_2d, drift_loss, minibatch_stddev, pixelwise_feature_vector_norm
 from ae import code_autoencoder_mse, code_autoencoder_mse_cosine, build_dcgan_generator, build_dcgan_encoder, build_encoder, build_1lvl_generator, build_dcgan_generator
-from faae import build_discriminator_1lvl, build_dcgan_discriminator, build_faae_harness
+from faae import build_faae_harness
 from aae import build_code_discriminator, build_aae_harness
-from aae_train import aegan_model, aegan_train_ops, get_sequential_train_hooks
+from aae_train import aegan_model, aegan_train_ops
+from plain_gan import build_gan_harness, build_dcgan_discriminator, build_discriminator_1lvl, build_discriminator_2lvl
 from AMSGrad import AMSGrad
 
 tf.logging.set_verbosity(tf.logging.INFO)
 
 # --------------------------- CONSTANTS ---------------------------
 
-# Type: either "FAAE" (flipped-Adversarial Autoencoder) or "AAE" (Adversarial Autoencoder)
-TYPE = "AAE"
+# Type: either "FAAE" (flipped-Adversarial Autoencoder), "AAE" (Adversarial Autoencoder), or "GAN" (no encoder)
+TYPE = "GAN"
 # The aversarial training loss ("WASSERSTEIN" for GP-WGAN, anything else is `modified_loss`)
-ADVERSARIAL_TRAINING = "WASSERSTEIN"
+ADVERSARIAL_TRAINING = "MODIFIED"
 # The run key to be used
 KEY = "{}{}_dcgan_bn_sphere_reg_RUN1".format(
     TYPE, '_W' if ADVERSARIAL_TRAINING == "WASSERSTEIN" else "")
@@ -39,14 +40,14 @@ ONLY_SAVE = False
 # Debug mode
 DEBUG = False
 # Batch size
-BATCH_SIZE = 24
+BATCH_SIZE = 32
 # The number of dimensions of the prior/latent code
 NOISE_DIMS = 512
 # The random distribution of the prior code (choices: "SPHERE", "UNIFORM", "NORMAL")
 NOISE_FORMAT = "SPHERE"
 # The real/generated image size in pixels
 IMAGE_SIZE = 64
-# The extra margin to consider in random cropping: image will be  first
+# The extra margin to consider in random cropping: image will be first
 # resized to the size `IMAGE_SIZE + CROP_MARGIN_SIZE` 
 CROP_MARGIN_SIZE = 8
 
@@ -54,9 +55,9 @@ CROP_MARGIN_SIZE = 8
 N_CHANNELS = 3
 # Estimated number of epochs based on batch size and training data size
 # (should be updated based on batch size and training set size)
-STEPS_PER_EPOCH = 10
+STEPS_PER_EPOCH = 223859 // BATCH_SIZE
 # Number of epochs to train
-NUM_EPOCHS = 15
+NUM_EPOCHS = 100
 # Total number of steps to train
 NUM_STEPS = STEPS_PER_EPOCH * NUM_EPOCHS
 # Number of reconstruction steps per iteration
@@ -64,11 +65,11 @@ R_STEPS = 1
 # Number of generator training steps per iteration
 G_STEPS = 1
 # Number of discriminator/critic training steps per iteration
-D_STEPS = 2
+D_STEPS = 1
 # ---
 # These constants point to network building functions with a custom prototype.
 GENERATOR_FN = build_dcgan_generator
-DISCRIMINATOR_FN = build_code_discriminator
+DISCRIMINATOR_FN = build_discriminator_1lvl
 ENCODER_FN = build_encoder
 # -----------------------------------------------------------------
 
@@ -93,20 +94,23 @@ def save(export_dir=None, generator_scope=None, encoder_scope=None):
         encoder_scope = tf.variable_scope(
             encoder_scope or "Encoder", reuse=True)
 
-        # basic encoder signature
-        with encoder_scope:
-            x_input = tf.placeholder(
-                tf.float32, shape=[None, IMAGE_SIZE, IMAGE_SIZE, N_CHANNELS])
-            encoded_z = ENCODER_FN(
-                x_input, NOISE_DIMS, mode='PREDICT')
-        encode_signature_inputs = {
-            "x": saved_model.utils.build_tensor_info(x_input)
-        }
-        encode_signature_outputs = {
-            "z": saved_model.utils.build_tensor_info(encoded_z)
-        }
-        encode_signature_def = saved_model.signature_def_utils.build_signature_def(
-            encode_signature_inputs, encode_signature_outputs, 'encode')
+        defmap = {}
+
+        if TYPE != "GAN":
+            # basic encoder signature
+            with encoder_scope:
+                x_input = tf.placeholder(
+                    tf.float32, shape=[None, IMAGE_SIZE, IMAGE_SIZE, N_CHANNELS])
+                encoded_z = ENCODER_FN(
+                    x_input, NOISE_DIMS, mode='PREDICT')
+            encode_signature_inputs = {
+                "x": saved_model.utils.build_tensor_info(x_input)
+            }
+            encode_signature_outputs = {
+                "z": saved_model.utils.build_tensor_info(encoded_z)
+            }
+            defmap['encode'] = saved_model.signature_def_utils.build_signature_def(
+                encode_signature_inputs, encode_signature_outputs, 'encode')
 
         # basic generator signature
         with generator_scope:
@@ -118,16 +122,13 @@ def save(export_dir=None, generator_scope=None, encoder_scope=None):
         generate_signature_outputs = {
             "x": saved_model.utils.build_tensor_info(sample)
         }
-        generate_signature_def = saved_model.signature_def_utils.build_signature_def(
+        defmap['generate'] = saved_model.signature_def_utils.build_signature_def(
             generate_signature_inputs, generate_signature_outputs,
             'generate')
 
         builder.add_meta_graph_and_variables(
             sess, [saved_model.tag_constants.SERVING],
-            signature_def_map={
-                'encode': encode_signature_def,
-                'generate': generate_signature_def
-            })
+            signature_def_map=defmap)
         builder.save(as_text=False)
 
 
@@ -153,6 +154,10 @@ elif TYPE == 'FAAE':
     (model, loss, rec_loss, train) = build_faae_harness(
         image_input, noise, GENERATOR_FN, DISCRIMINATOR_FN, ENCODER_FN,
         NOISE_FORMAT, adversarial_training=ADVERSARIAL_TRAINING, no_trainer=ONLY_SAVE)
+elif TYPE == 'GAN':
+    (model, loss, train) = build_gan_harness(
+        image_input, noise, GENERATOR_FN, DISCRIMINATOR_FN,
+        NOISE_FORMAT, adversarial_training=ADVERSARIAL_TRAINING, no_trainer=ONLY_SAVE)
 else:
     print("Invalid network type", TYPE)
     exit(-1)
@@ -163,15 +168,25 @@ if ONLY_SAVE:
 
 writer = tf.summary.FileWriter(LOG_DIR)
 
-train_hooks = [
-    # console logging hook
-    tf.train.LoggingTensorHook({
+# console logging hook
+if TYPE == 'GAN':
+    log_hook = tf.train.LoggingTensorHook({
+        'generator_loss': loss.generator_loss,
+        '{}_loss'.format(
+            'critic' if ADVERSARIAL_TRAINING == 'WASSERSTEIN'
+            else 'discriminator'): loss.discriminator_loss
+    }, every_n_iter=10)
+else:
+    log_hook = tf.train.LoggingTensorHook({
         'generator_loss': loss.generator_loss,
         '{}_loss'.format(
             'critic' if ADVERSARIAL_TRAINING == 'WASSERSTEIN'
             else 'discriminator'): loss.discriminator_loss,
         'reconstruction_loss': rec_loss
-    }, every_n_iter=10),
+    }, every_n_iter=10)
+
+train_hooks = [
+    log_hook,
     tf.train.StopAtStepHook(num_steps=NUM_STEPS),
 ]
 
@@ -180,12 +195,40 @@ if DEBUG:
         tf_debug.TensorBoardDebugHook('localhost:6064')
     )
 
+r_steps = 0 if TYPE == "GAN" else R_STEPS
+
+def get_sequential_train_hooks(rec_steps: int = 1, disc_steps: int = 1, gen_steps: int = 1):
+    """Returns a hooks function for sequential auto-encoding GAN training.
+
+    Args:
+      rec_steps: how many reconstruction steps to take
+      disc_steps: how many discriminator training steps to take.
+      gen_steps: how many generator steps to take
+
+    Returns:
+      A function that takes an AEGANTrainOps tuple and returns a list of hooks.
+    """
+    assert rec_steps >= 0
+    assert disc_steps > 0
+    assert gen_steps > 0
+    def get_hooks(train_ops):
+        discriminator_hook = tfgan.RunTrainOpsHook(train_ops.discriminator_train_op,
+                                                   disc_steps)
+        generator_hook = tfgan.RunTrainOpsHook(train_ops.generator_train_op,
+                                               gen_steps)
+        if rec_steps:
+            reconstruction_hook = tfgan.RunTrainOpsHook(train_ops.rec_train_op,
+                                                        rec_steps)
+            return [reconstruction_hook, discriminator_hook, generator_hook]
+        return [discriminator_hook, generator_hook]
+    return get_hooks
+
 print("Training process begins: {} steps".format(NUM_STEPS))
 config = tf.ConfigProto()
 tfgan.gan_train(
     train,
     logdir=LOG_DIR,
-    get_hooks_fn=get_sequential_train_hooks(R_STEPS, D_STEPS, G_STEPS),
+    get_hooks_fn=get_sequential_train_hooks(r_steps, D_STEPS, G_STEPS),
     hooks=train_hooks,
     save_summaries_steps=100,
     save_checkpoint_secs=1200,
