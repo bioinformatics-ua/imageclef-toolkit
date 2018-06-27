@@ -7,7 +7,7 @@ import tensorflow as tf
 from tensorflow.python import debug as tf_debug  # pylint: disable=E0611
 from tensorflow import saved_model
 from tensorflow.contrib import gan as tfgan
-from dataset_imageclef import get_dataset_dir
+from dataset_imagedir import get_dataset_dir
 from util import image_summaries_generated, image_grid_summary, random_noise, upsample_2d, drift_loss, minibatch_stddev, pixelwise_feature_vector_norm
 from ae import code_autoencoder_mse, code_autoencoder_mse_cosine, build_dcgan_generator, build_dcgan_encoder, build_encoder, build_1lvl_generator, build_dcgan_generator
 from faae import build_faae_harness
