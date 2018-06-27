@@ -135,7 +135,7 @@ def save(export_dir=None, generator_scope=None, encoder_scope=None):
 print("Loading up data set...")
 
 # Set up the inputs
-dataset = get_dataset_dir(DATA_DIR, batch_size=BATCH_SIZE, resizeto=IMAGE_SIZE + CROP_MARGIN_SIZE,
+dataset = get_dataset_dir(DATA_DIR, batch_size=BATCH_SIZE, nchannels=N_CHANNELS, resizeto=IMAGE_SIZE + CROP_MARGIN_SIZE,
                       cropto=IMAGE_SIZE, normalize=True, shuffle=True)
 image_input = dataset.make_one_shot_iterator().get_next()
 image_input.set_shape([BATCH_SIZE, IMAGE_SIZE, IMAGE_SIZE, N_CHANNELS])
