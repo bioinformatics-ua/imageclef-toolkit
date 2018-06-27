@@ -164,12 +164,13 @@ def build_gan_harness(image_input: tf.Tensor,
                       summarize_activations: bool = False) -> tuple:
     image_size = image_input.shape.as_list()[1]
     noise_dim = noise.shape.as_list()[1]
+    nchannels = image_input.shape.as_list()[3]
     print("Plain Generative Adversarial Network: {}x{} images".format(
         image_size, image_size))
 
     def _generator_fn(z):
         return generator(
-            z, add_summaries=True, mode='TRAIN')
+            z, nchannels=nchannels, add_summaries=True, mode='TRAIN')
 
     def _discriminator_fn(x, z):
         return discriminator(
@@ -208,8 +209,8 @@ def build_gan_harness(image_input: tf.Tensor,
     else:
         train_ops = tfgan.gan_train_ops(gan_model, gan_loss,
                                         generator_optimizer=AMSGrad(
-                                            5e-5, beta1=0.5, beta2=0.99),
+                                            1e-4, beta1=0.0, beta2=0.9),
                                         discriminator_optimizer=AMSGrad(
-                                            1e-4, beta1=0.5, beta2=0.99),
+                                            5e-5, beta1=0.0, beta2=0.9),
                                         summarize_gradients=True)
     return (gan_model, gan_loss, train_ops)

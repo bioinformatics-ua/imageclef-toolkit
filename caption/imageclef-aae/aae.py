@@ -64,6 +64,7 @@ def build_aae_harness(image_input: tf.Tensor,
 
     image_size = image_input.shape.as_list()[1]
     noise_dim = noise.shape.as_list()[1]
+    nchannels = image_input.shape.as_list()[3]
     print("Adversarial Auto-Encoder: {}x{} images".format(image_size, image_size))
 
     # AAE's are inverted from the perspective of a GAN: generated samples are latent codes.
@@ -73,7 +74,7 @@ def build_aae_harness(image_input: tf.Tensor,
                           add_summary=False, mode='TRAIN')
 
     def _encoder_fn(z):
-        return decoder_fn(z, mode='TRAIN')
+        return decoder_fn(z, nchannels=nchannels, mode='TRAIN')
 
     def _discriminator_fn(z, x):
         return discriminator_fn(z, add_drift_loss=True, mode='TRAIN')

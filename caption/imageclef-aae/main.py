@@ -135,7 +135,8 @@ def save(export_dir=None, generator_scope=None, encoder_scope=None):
 print("Loading up data set...")
 
 # Set up the inputs
-dataset = get_dataset_dir(DATA_DIR, batch_size=BATCH_SIZE, resizeto=IMAGE_SIZE + CROP_MARGIN_SIZE,
+dataset = get_dataset_dir(DATA_DIR, batch_size=BATCH_SIZE, nchannels=N_CHANNELS,
+                          resizeto=IMAGE_SIZE + CROP_MARGIN_SIZE,
                       cropto=IMAGE_SIZE, normalize=True, shuffle=True)
 image_input = dataset.make_one_shot_iterator().get_next()
 image_input.set_shape([BATCH_SIZE, IMAGE_SIZE, IMAGE_SIZE, N_CHANNELS])
@@ -149,15 +150,15 @@ makedirs(profile_path, exist_ok=True)
 if TYPE == 'AAE':
     (model, loss, rec_loss, train) = build_aae_harness(
         image_input, noise, GENERATOR_FN, DISCRIMINATOR_FN, ENCODER_FN,
-        NOISE_FORMAT, adversarial_training=ADVERSARIAL_TRAINING, no_trainer=ONLY_SAVE)
+        noise_format=NOISE_FORMAT, adversarial_training=ADVERSARIAL_TRAINING, no_trainer=ONLY_SAVE)
 elif TYPE == 'FAAE':
     (model, loss, rec_loss, train) = build_faae_harness(
         image_input, noise, GENERATOR_FN, DISCRIMINATOR_FN, ENCODER_FN,
-        NOISE_FORMAT, adversarial_training=ADVERSARIAL_TRAINING, no_trainer=ONLY_SAVE)
+        noise_format=NOISE_FORMAT, adversarial_training=ADVERSARIAL_TRAINING, no_trainer=ONLY_SAVE)
 elif TYPE == 'GAN':
     (model, loss, train) = build_gan_harness(
         image_input, noise, GENERATOR_FN, DISCRIMINATOR_FN,
-        NOISE_FORMAT, adversarial_training=ADVERSARIAL_TRAINING, no_trainer=ONLY_SAVE)
+        noise_format=NOISE_FORMAT, adversarial_training=ADVERSARIAL_TRAINING, no_trainer=ONLY_SAVE)
 else:
     print("Invalid network type", TYPE)
     exit(-1)
@@ -197,14 +198,7 @@ if DEBUG:
 
 r_steps = 0 if TYPE == "GAN" else R_STEPS
 
-def get_sequential_train_hooks(rec_steps: int = 1, disc_steps: int = 1, gen_steps: int = 1):
     """Returns a hooks function for sequential auto-encoding GAN training.
-
-    Args:
-      rec_steps: how many reconstruction steps to take
-      disc_steps: how many discriminator training steps to take.
-      gen_steps: how many generator steps to take
-
     Returns:
       A function that takes an AEGANTrainOps tuple and returns a list of hooks.
     """
@@ -219,6 +213,7 @@ def get_sequential_train_hooks(rec_steps: int = 1, disc_steps: int = 1, gen_step
         if rec_steps:
             reconstruction_hook = tfgan.RunTrainOpsHook(train_ops.rec_train_op,
                                                         rec_steps)
+
             return [reconstruction_hook, discriminator_hook, generator_hook]
         return [discriminator_hook, generator_hook]
     return get_hooks
@@ -231,6 +226,7 @@ tfgan.gan_train(
     get_hooks_fn=get_sequential_train_hooks(r_steps, D_STEPS, G_STEPS),
     hooks=train_hooks,
     save_summaries_steps=100,
+
     save_checkpoint_secs=1200,
     config=config)
 

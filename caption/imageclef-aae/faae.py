@@ -21,11 +21,12 @@ def build_faae_harness(image_input: tf.Tensor,
                        summarize_activations: bool = False):
     image_size = image_input.shape.as_list()[1]
     noise_dim = noise.shape.as_list()[1]
+    nchannels = image_input.shape.as_list()[3]
     print("Flipped Adversarial Auto-Encoder: {}x{} images".format(image_size, image_size))
 
     def _generator_fn(z):
         return generator(
-            z, add_summaries=True, mode='TRAIN')
+            z, nchannels=nchannels, add_summaries=True, mode='TRAIN')
 
     def _encoder_fn(x):
         return encoder(
