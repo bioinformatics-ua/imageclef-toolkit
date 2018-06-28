@@ -8,7 +8,7 @@ import sys
 import h5py as h5
 import tensorflow as tf
 
-from dataset_imageclef import get_dataset_dir_with_ids
+from dataset_imagedir import get_dataset_dir_with_ids
 
 parser = argparse.ArgumentParser()
 
@@ -34,11 +34,8 @@ with tf.Session(graph=tf.Graph()) as sess:
         sess, [tf.saved_model.tag_constants.SERVING], FLAGS.model_dir)
 
     signaturedef = graphdef.signature_def['encode']
-    #print(signaturedef)
 
     # 1. retrieve input and z tensor
-    #x = sess.graph.get_tensor_by_name("x-input/X:0")
-    #z = sess.graph.get_tensor_by_name("Relu_6:0")
     inputs = signaturedef.inputs
     xdef = inputs['x']
 
@@ -87,6 +84,4 @@ with tf.Session(graph=tf.Graph()) as sess:
                 break
 
     id_list.close()
-    print("\nDone.")
-    #print(graphdef)
-
+    print("\nFeatures saved in `{}`.".format(FLAGS.out))
