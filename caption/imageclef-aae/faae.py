@@ -78,11 +78,11 @@ def build_faae_harness(image_input: tf.Tensor,
     else:
         train_ops = aegan_train_ops(gan_model, gan_loss, rec_loss,
                                     generator_optimizer=AMSGrad(
-                                        1e-4, beta1=0.0, beta2=0.9),
+                                        1e-4, beta1=0.5, beta2=0.99),
                                     discriminator_optimizer=AMSGrad(
-                                        3e-4, beta1=0.0, beta2=0.9),
+                                        1e-4, beta1=0.5, beta2=0.99),
                                     reconstruction_optimizer=AMSGrad(
-                                        1e-4, beta1=0.0, beta2=0.9),
+                                        1e-4, beta1=0.5, beta2=0.99),
                                     summarize_gradients=True)
 
     return (gan_model, gan_loss, rec_loss, train_ops)

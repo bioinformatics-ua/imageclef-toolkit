@@ -21,7 +21,7 @@ tf.logging.set_verbosity(tf.logging.INFO)
 # --------------------------- CONSTANTS ---------------------------
 
 # Type: either "FAAE" (flipped-Adversarial Autoencoder), "AAE" (Adversarial Autoencoder), or "GAN" (no encoder)
-TYPE = "GAN"
+TYPE = "AAE"
 # The aversarial training loss ("WASSERSTEIN" for GP-WGAN, anything else is `modified_loss`)
 ADVERSARIAL_TRAINING = "MODIFIED"
 # The run key to be used
@@ -42,7 +42,7 @@ DEBUG = False
 # Batch size
 BATCH_SIZE = 32
 # The number of dimensions of the prior/latent code
-NOISE_DIMS = 512
+NOISE_DIMS = 1024
 # The random distribution of the prior code (choices: "SPHERE", "UNIFORM", "NORMAL")
 NOISE_FORMAT = "SPHERE"
 # The real/generated image size in pixels
@@ -53,7 +53,7 @@ CROP_MARGIN_SIZE = 8
 
 # Number of channels in the images
 N_CHANNELS = 3
-# Estimated number of epochs based on batch size and training data size
+# Estimated number of steps per epoch based on batch size and training data size
 # (should be updated based on batch size and training set size)
 STEPS_PER_EPOCH = 223859 // BATCH_SIZE
 # Number of epochs to train
@@ -68,8 +68,9 @@ G_STEPS = 1
 D_STEPS = 1
 # ---
 # These constants point to network building functions with a custom prototype.
+# More functions which can be assigned here are available in the modules `ae.py`, `aae.py` and `plain_gan.py`.
 GENERATOR_FN = build_dcgan_generator
-DISCRIMINATOR_FN = build_discriminator_1lvl
+DISCRIMINATOR_FN = build_code_discriminator
 ENCODER_FN = build_encoder
 # -----------------------------------------------------------------
 

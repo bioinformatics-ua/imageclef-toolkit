@@ -15,7 +15,7 @@ fully_connected = tf.contrib.layers.fully_connected
 arg_scope = tf.contrib.framework.arg_scope
 
 
-def build_code_discriminator(z: tf.Tensor, add_drift_loss=True, input_noise_factor=0.125, hidden_noise_factor=0.25,
+def build_code_discriminator(z: tf.Tensor, add_drift_loss=True, input_noise_factor=0., hidden_noise_factor=0.25,
                              add_summaries=True, mode=None) -> tf.Tensor:
     "1-level latent code discriminator (only looks at z)"
 
@@ -36,15 +36,10 @@ def build_code_discriminator(z: tf.Tensor, add_drift_loss=True, input_noise_fact
                        normalizer_params={'center': True, 'scale': True},
                        activation_fn=tf.nn.leaky_relu):
             net = fully_connected(z_noisy, 1024)  # Bx1024
-            net = tf.layers.dropout(
-                net, rate=hidden_noise_factor, training=True)
+            net = fully_connected(net, 1024)  # Bx1024
             net = fully_connected(net, 1024)  # Bx1024
             net = tf.layers.dropout(
                 net, rate=hidden_noise_factor, training=True)
-            net = fully_connected(net, 1024)  # Bx1024
-            net = tf.layers.dropout(
-                net, rate=hidden_noise_factor, training=True)
-        # net = minibatch_stddev(net)  # add stddev to minibatch
         net = fully_connected(net, 1, activation_fn=None)
         if add_drift_loss:
             add_drift_regularizer(net, add_summary=add_summaries)
@@ -126,11 +121,11 @@ def build_aae_harness(image_input: tf.Tensor,
     else:
         train_ops = aegan_train_ops(gan_model, gan_loss, rec_loss,
                                     generator_optimizer=AMSGrad(
-                                        1e-4, beta1=0.0, beta2=0.9),
+                                        1e-4, beta1=0.5, beta2=0.99),
                                     discriminator_optimizer=AMSGrad(
-                                        1e-4, beta1=0.0, beta2=0.9),
+                                        1e-4, beta1=0.5, beta2=0.99),
                                     reconstruction_optimizer=AMSGrad(
-                                        1e-4, beta1=0.0, beta2=0.9),
+                                        1e-4, beta1=0.5, beta2=0.99),
                                     summarize_gradients=True
                                     )
 

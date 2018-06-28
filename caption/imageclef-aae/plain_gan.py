@@ -209,8 +209,8 @@ def build_gan_harness(image_input: tf.Tensor,
     else:
         train_ops = tfgan.gan_train_ops(gan_model, gan_loss,
                                         generator_optimizer=AMSGrad(
-                                            1e-4, beta1=0.0, beta2=0.9),
+                                            1e-4, beta1=0.5, beta2=0.9),
                                         discriminator_optimizer=AMSGrad(
-                                            5e-5, beta1=0.0, beta2=0.9),
+                                            1e-4, beta1=0.5, beta2=0.9),
                                         summarize_gradients=True)
     return (gan_model, gan_loss, train_ops)
