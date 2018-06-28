@@ -3,7 +3,7 @@
 This section contains tools for the concept detection sub-task of ImageCLEF Caption. It comprises the following tools:
 
 - [imageclef-aae](imageclef-aae): a TensorFlow program for unsupervised representation learning using auto-encoders with adversarial networks.
-- [notebooks](notebooks): a set of Jupyter notebooks for training classifiers for the ImageCLEF concept detection task.
+- [notebooks](notebooks): _Currently not available, but stay tuned!_ A set of Jupyter notebooks for training classifiers for the ImageCLEF concept detection task.
 
 These tools were originally developed in the scope of the following paper:
 
