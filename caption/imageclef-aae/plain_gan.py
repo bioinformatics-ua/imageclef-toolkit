@@ -174,7 +174,7 @@ def build_gan_harness(image_input: tf.Tensor,
 
     def _discriminator_fn(x, z):
         return discriminator(
-            x, z, add_drift_loss=True, batch_norm=False, mode='TRAIN')
+            x, z, add_drift_loss=True, batch_norm=True, mode='TRAIN')
 
     gan_model = tfgan.gan_model(
         _generator_fn, _discriminator_fn, image_input, noise,
@@ -209,8 +209,8 @@ def build_gan_harness(image_input: tf.Tensor,
     else:
         train_ops = tfgan.gan_train_ops(gan_model, gan_loss,
                                         generator_optimizer=AMSGrad(
-                                            1e-4, beta1=0.5, beta2=0.9),
+                                            1e-5, beta1=0.5, beta2=0.99),
                                         discriminator_optimizer=AMSGrad(
-                                            1e-4, beta1=0.5, beta2=0.9),
+                                            1e-4, beta1=0.5, beta2=0.99),
                                         summarize_gradients=True)
     return (gan_model, gan_loss, train_ops)

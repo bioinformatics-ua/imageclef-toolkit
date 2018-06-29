@@ -20,15 +20,15 @@ tf.logging.set_verbosity(tf.logging.INFO)
 
 # --------------------------- CONSTANTS ---------------------------
 
-# Type: either "FAAE" (flipped-Adversarial Autoencoder), "AAE" (Adversarial Autoencoder), or "GAN" (no encoder)
-TYPE = "AAE"
+# Type: either "FAAE" (flipped-Adversarial Autoencoder), "AAE" (Adversarial Autoencoder), "VAEGAN" (VAE - GAN), or "GAN" (no encoder)
+TYPE = "GAN"
 # The aversarial training loss ("WASSERSTEIN" for GP-WGAN, anything else is `modified_loss`)
 ADVERSARIAL_TRAINING = "MODIFIED"
 # The run key to be used
-KEY = "{}{}_dcgan_bn_sphere_reg_RUN1".format(
+KEY = "{}{}_xray_RUN2".format(
     TYPE, '_W' if ADVERSARIAL_TRAINING == "WASSERSTEIN" else "")
 # Training data set dir
-DATA_DIR = "CaptionTraining2018"
+DATA_DIR = "x-rays"
 # TensorBoard log dir
 LOG_DIR = "summaries/{}".format(KEY)
 # Where to save the model in the end (`KEY` is appended automatically)
@@ -42,7 +42,7 @@ DEBUG = False
 # Batch size
 BATCH_SIZE = 32
 # The number of dimensions of the prior/latent code
-NOISE_DIMS = 1024
+NOISE_DIMS = 512
 # The random distribution of the prior code (choices: "SPHERE", "UNIFORM", "NORMAL")
 NOISE_FORMAT = "SPHERE"
 # The real/generated image size in pixels
@@ -52,12 +52,12 @@ IMAGE_SIZE = 64
 CROP_MARGIN_SIZE = 8
 
 # Number of channels in the images
-N_CHANNELS = 3
+N_CHANNELS = 1
 # Estimated number of steps per epoch based on batch size and training data size
 # (should be updated based on batch size and training set size)
-STEPS_PER_EPOCH = 223859 // BATCH_SIZE
+STEPS_PER_EPOCH = 25000 // BATCH_SIZE
 # Number of epochs to train
-NUM_EPOCHS = 50
+NUM_EPOCHS = 100
 # Total number of steps to train
 NUM_STEPS = STEPS_PER_EPOCH * NUM_EPOCHS
 # Number of reconstruction steps per iteration
@@ -70,7 +70,7 @@ D_STEPS = 1
 # These constants point to network building functions with a custom prototype.
 # More functions which can be assigned here are available in the modules `ae.py`, `aae.py` and `plain_gan.py`.
 GENERATOR_FN = build_dcgan_generator
-DISCRIMINATOR_FN = build_code_discriminator
+DISCRIMINATOR_FN = build_discriminator_1lvl
 ENCODER_FN = build_encoder
 # -----------------------------------------------------------------
 
@@ -116,7 +116,7 @@ def save(export_dir=None, generator_scope=None, encoder_scope=None):
         # basic generator signature
         with generator_scope:
             z_input = tf.placeholder(tf.float32, shape=[None, NOISE_DIMS])
-            sample = GENERATOR_FN(z_input, mode='PREDICT')
+            sample = GENERATOR_FN(z_input, nchannels=N_CHANNELS, mode='PREDICT')
         generate_signature_inputs = {
             "z": saved_model.utils.build_tensor_info(z_input)
         }
