@@ -2,6 +2,31 @@
 
 import tensorflow as tf
 from tensorflow.contrib import gan as tfgan
+from rel_loss import relativistic_average_discriminator_loss, relativistic_average_generator_loss
+
+
+def gan_loss_by_name(gan_model: tfgan.GANModel, name: str, add_summaries=True):
+    if name == "WASSERSTEIN":
+        return tfgan.gan_loss(
+            gan_model,
+            generator_loss_fn=tfgan.losses.wasserstein_generator_loss,
+            discriminator_loss_fn=tfgan.losses.wasserstein_discriminator_loss,
+            gradient_penalty_weight=10.0,
+            add_summaries=add_summaries
+        )
+    elif name == "RELATIVISTIC_AVG":
+        return tfgan.gan_loss(
+            gan_model,
+            generator_loss_fn=relativistic_average_generator_loss,
+            discriminator_loss_fn=relativistic_average_discriminator_loss,
+            add_summaries=add_summaries
+        )
+    return tfgan.gan_loss(
+        gan_model,
+        generator_loss_fn=tfgan.losses.modified_generator_loss,
+        discriminator_loss_fn=tfgan.losses.modified_discriminator_loss,
+        add_summaries=add_summaries
+    )
 
 
 def assert_is_image(data):
@@ -161,3 +186,29 @@ def pixelwise_feature_vector_norm(incoming: tf.Tensor, epsilon=1e-11, name="lrn"
         norms = tf.reduce_mean(tf.square(incoming), axis=3, keepdims=True)
         return incoming / (tf.sqrt(norms) + epsilon)
 
+
+def spectral_norm(w, iteration=1):
+    """Spectral normalization.
+    Adapted from: https://github.com/taki0112/Spectral_Normalization-Tensorflow
+    """
+    w_shape = w.shape.as_list()
+    w = tf.reshape(w, [-1, w_shape[-1]])
+
+    u = tf.get_variable("u", [1, w_shape[-1]], initializer=tf.truncated_normal_initializer(), trainable=False)
+
+    u_hat = u
+    v_hat = None
+    for _i in range(iteration):
+        v_ = tf.matmul(u_hat, tf.transpose(w))
+        v_hat = tf.nn.l2_normalize(v_)
+
+        u_ = tf.matmul(v_hat, w)
+        u_hat = tf.nn.l2_normalize(u_)
+
+    sigma = tf.matmul(tf.matmul(v_hat, w), tf.transpose(u_hat))
+    w_norm = w / sigma
+
+    with tf.control_dependencies([u.assign(u_hat)]):
+        w_norm = tf.reshape(w_norm, w_shape)
+
+    return w_norm

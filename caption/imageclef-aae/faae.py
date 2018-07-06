@@ -3,7 +3,7 @@
 
 import tensorflow as tf
 from tensorflow.contrib import gan as tfgan
-from util import add_drift_regularizer, image_summaries_generated, image_grid_summary, minibatch_stddev
+from util import add_drift_regularizer, image_summaries_generated, image_grid_summary, minibatch_stddev, gan_loss_by_name
 from ae import conv_block, conv_t_block, build_dcgan_encoder, build_dcgan_generator, build_encoder, build_1lvl_generator, code_autoencoder_mse_cosine
 from aae_train import aegan_model, aegan_train_ops
 from AMSGrad import AMSGrad
@@ -15,6 +15,9 @@ def build_faae_harness(image_input: tf.Tensor,
                        generator,
                        discriminator,
                        encoder,
+                       generator_learning_rate = 1e-4,
+                       discriminator_learning_rate = 1e-4,
+                       reconstruction_learning_rate = 1e-4,
                        noise_format: str = 'SPHERE',
                        adversarial_training: str = 'WASSERSTEIN',
                        no_trainer: bool = False,
@@ -54,21 +57,8 @@ def build_faae_harness(image_input: tf.Tensor,
     with tf.variable_scope(gan_model.encoder_scope):
         tf.summary.histogram('encoded_z', gan_model.encoder_gen_outputs)
 
-    if adversarial_training == "WASSERSTEIN":
-        gan_loss = tfgan.gan_loss(
-            gan_model,
-            generator_loss_fn=tfgan.losses.wasserstein_generator_loss,
-            discriminator_loss_fn=tfgan.losses.wasserstein_discriminator_loss,
-            gradient_penalty_weight=10.0,
-            add_summaries=True
-        )
-    else:
-        gan_loss = tfgan.gan_loss(
-            gan_model,
-            generator_loss_fn=tfgan.losses.modified_generator_loss,
-            discriminator_loss_fn=tfgan.losses.modified_discriminator_loss,
-            add_summaries=True
-        )
+    gan_loss = gan_loss_by_name(gan_model, adversarial_training, add_summaries=True)
+
     # add auto-encoder reconstruction loss
     rec_loss = code_autoencoder_mse_cosine(
         gan_model.generator_inputs, gan_model.encoder_gen_outputs, 1e-3, add_summary=True)
@@ -78,11 +68,11 @@ def build_faae_harness(image_input: tf.Tensor,
     else:
         train_ops = aegan_train_ops(gan_model, gan_loss, rec_loss,
                                     generator_optimizer=AMSGrad(
-                                        1e-4, beta1=0.5, beta2=0.99),
+                                        generator_learning_rate, beta1=0.5, beta2=0.99),
                                     discriminator_optimizer=AMSGrad(
-                                        1e-4, beta1=0.5, beta2=0.99),
+                                        discriminator_learning_rate, beta1=0.5, beta2=0.99),
                                     reconstruction_optimizer=AMSGrad(
-                                        1e-4, beta1=0.5, beta2=0.99),
+                                        reconstruction_learning_rate, beta1=0.5, beta2=0.99),
                                     summarize_gradients=True)
 
     return (gan_model, gan_loss, rec_loss, train_ops)
