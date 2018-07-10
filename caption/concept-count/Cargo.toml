@@ -1,0 +1,9 @@
+[package]
+authors = ["Eduardo Pinho <eduardopinho@ua.pt>"]
+name = "concept-count"
+license = "MIT"
+version = "0.1.0"
+publish = false
+
+[dependencies]
+structopt = "0.2.10"
