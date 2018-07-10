@@ -72,7 +72,7 @@ with tf.Session(graph=tf.Graph()) as sess:
                 bsize = data.shape[0]
                 z_features = sess.run(z, feed_dict={x: data})
                 for l in ids:
-                    l = str(l)[2:-1]
+                    l = l.decode('UTF-8')
                     id_list.write(l)
                     id_list.write("\n")
                     h5ids[j] = l
