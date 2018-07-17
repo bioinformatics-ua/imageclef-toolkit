@@ -3,7 +3,7 @@
 This section contains tools for the concept detection sub-task of ImageCLEF Caption. It comprises the following tools:
 
 - [imageclef-aae](imageclef-aae): a TensorFlow program for unsupervised representation learning using auto-encoders with adversarial networks.
-- [notebooks](notebooks): _Currently not available, but stay tuned!_ A set of Jupyter notebooks for training classifiers for the ImageCLEF concept detection task.
+- [notebooks](notebooks): A set of Jupyter notebooks for training classifiers for the ImageCLEF concept detection task.
 - [concept-count](concept-count) is a simple CLI tool which counts all concepts in the concepts file.
 - [merge-submission](merge-submission) is a simple CLI tool to merge submission files for the concept detection task.
 
