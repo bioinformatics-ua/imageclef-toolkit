@@ -6,12 +6,12 @@ This code reproduces an unsupervised representation learning approach for the Im
 
 - Flipped-Adversarial Autoencoder (FAAE)
 - Adversarial Autoencoder (AAE)
-- A plain Generative Adversarial Network (GAN)
+- A plain Generative Adversarial Network (GAN), no encoder
 
 ## Requirements
 
 - Python 3.6
-- TensorFlow 1.7 or greater (tested up to 1.8)
+- TensorFlow 1.7 or greater (tested up to 1.9)
 - `h5py` for saving the extracted features
 
 ## Usage
