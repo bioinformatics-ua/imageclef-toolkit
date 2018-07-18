@@ -78,18 +78,17 @@ def predict(estimator, idlist, x, threshold, concepts_to_train, checkpoint_path=
     Return: iterable
     """
     assert x.shape[0] == len(idlist)
-    pred = estimator.predict(create_input_fn(x, None, num_epochs=1, batch_size=100),
+    print("idlist: {}, len = {}".format(type(idlist), len(idlist)))
+    pred = estimator.predict(create_input_fn(x, None, num_epochs=1, batch_size=64),
         predict_keys=None,
         checkpoint_path=checkpoint_path
     )
+    concepts_to_train = np.array(concepts_to_train)
     pred = [p['probabilities'] for p in pred]
     assert len(pred) == len(idlist)
-    return (
-        (
-            fileid,
-            [c for (c, v) in zip(concepts_to_train, multi) if v >= threshold]
-        ) for (fileid, multi) in zip(idlist, pred))
+    positive_concepts = (concepts_to_train[multi >= threshold] for multi in pred)
 
+    return zip(idlist, positive_concepts)
 
 class TrainBundle:
     def __init__(self):
@@ -140,13 +139,31 @@ def get_config(name):
 
 
 def add_f1_score_metrics(metrics, thresholds):
-    print("Building some other metrics!")
+    #print("Building some other metrics!")
     for threshold in thresholds:
         precision = metrics["precision/positive_threshold_{}".format(threshold)]
         recall = metrics["recall/positive_threshold_{}".format(threshold)]
         metrics["f1/positive_threshold_{}".format(threshold)] = f1(precision, recall)
     return metrics
 
+def maximizing_f1_score(probabilities, labels):
+    """Implementation of the F1 maximizing threshold algorithm, as described in
+        Lipton et al, "Thresholding Classifiers to Maximize F1 Score" (2014)
+       
+    Args:
+      probabilities: ndarray (S, N) in range [0, 1], for S samples with N labels
+      labels: ndarray (S, N) with the ground truth, in {0, 1}
+    Returns: tuple
+      f1 : the maximum micro F1 score
+      threshold : the maximizing threshold (should be half of `f1`)
+    """
+    # total nr of positive labels in gold standard
+    a = np.sum(labels)
+    # nr of labels
+    n = labels.shape[1]
+    for c in range(10000):
+        z = [ n / (a + c) for n in range(n)]
+    return None
 
 def show_eval(bundle: TrainBundle, thresholds, name="model"):
     "Show the validation curves and save them to a file."
