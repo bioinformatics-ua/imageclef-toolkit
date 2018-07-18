@@ -3,16 +3,13 @@ extern crate structopt;
 
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::PathBuf;
 use structopt::StructOpt;
 
 type Result<T> = ::std::result::Result<T, Box<::std::error::Error>>;
 
 #[derive(StructOpt, Debug)]
-#[structopt(
-    name = "vocabulary", about = "Create the full vocabulary of concepts and their frequency."
-)]
 struct VocabularyArgs {
     #[structopt(name = "FILE", parse(from_os_str))]
     files: Vec<PathBuf>,
@@ -25,10 +22,6 @@ struct VocabularyArgs {
 }
 
 #[derive(StructOpt, Debug)]
-#[structopt(
-    name = "convert",
-    about = "Convert the file of lists of concepts into a file of lists of concept ids."
-)]
 struct ConvertArgs {
     #[structopt(name = "FILE", parse(from_os_str))]
     file: PathBuf,
@@ -49,6 +42,29 @@ struct ConvertArgs {
 }
 
 #[derive(StructOpt, Debug)]
+struct TransposeArgs {
+    #[structopt(name = "FILE", parse(from_os_str))]
+    file: PathBuf,
+
+    #[structopt(
+        short = "o", long = "output", default_value = "inverse-map.csv", parse(from_os_str)
+    )]
+    output: PathBuf,
+
+    #[structopt(long = "sort-image-ids", help = "Sort image IDs in each concept")]
+    sort_image_ids: bool,
+
+    #[structopt(long = "sort-concepts", help = "Sort concepts by descending image count")]
+    sort_concepts: bool,
+
+    #[structopt(long = "include-count", help = "Add image count as the output's second column")]
+    include_count: bool,
+
+    #[structopt(long = "separator", default_value = ",", help = "The concept delimiter")]
+    separator: String,
+}
+
+#[derive(StructOpt, Debug)]
 #[structopt(name = "concept_count", about = "ImageCLEFcaption concept counting and processing")]
 enum ConceptCount {
     #[structopt(
@@ -61,6 +77,9 @@ enum ConceptCount {
         about = "Convert the file of lists of concepts into a file of lists of concept ids."
     )]
     Convert(ConvertArgs),
+
+    #[structopt(name = "transpose", about = "Create an inverse mapping of concepts to ids.")]
+    Transpose(TransposeArgs),
 }
 
 fn main() {
@@ -69,6 +88,7 @@ fn main() {
     match args {
         ConceptCount::Vocabulary(args) => command_vocabulary(&args),
         ConceptCount::Convert(args) => command_convert(&args),
+        ConceptCount::Transpose(args) => command_transpose(&args),
     }.unwrap()
 }
 
@@ -77,8 +97,9 @@ fn command_vocabulary(args: &VocabularyArgs) -> Result<()> {
 
     let files = paths
         .into_iter()
-        .map(|p| BufReader::new(File::open(p).unwrap()));
-    let rows = files.flat_map(|f| f.lines().map(|r| r.unwrap()));
+        .map(File::open)
+        .map(|r| r.map(BufReader::new));
+    let rows = files.flat_map(|f| f.unwrap().lines().map(|r| r.unwrap()));
 
     let concepts = rows.map(|l| {
         let i = l.find("\t").unwrap();
@@ -167,5 +188,53 @@ fn command_convert(args: &ConvertArgs) -> Result<()> {
     }
 
     println!("Converted concepts saved in {}", output_path.display());
+    Ok(())
+}
+
+fn command_transpose(args: &TransposeArgs) -> Result<()> {
+    let file_data = ::std::fs::read_to_string(&args.file)?;
+    let mut map: HashMap<&str, Vec<&str>> = HashMap::new();
+
+    for l in file_data.lines() {
+        let mut cols = l.split("\t");
+        let (i, concepts) = (
+            cols.next().unwrap(),
+            cols.next().unwrap().split(|c| c == ';' || c == ','),
+        );
+        for c in concepts {
+            map.entry(c).or_insert_with(Vec::new).push(i);
+        }
+    }
+
+    if args.sort_image_ids {
+        for v in map.values_mut() {
+            v.sort_unstable();
+        }
+    }
+
+    let mut output = BufWriter::new(File::create(&args.output)?);
+
+    // convert to Vec
+    let mut map: Vec<(_, _)> = map.into_iter().collect();
+    if args.sort_concepts {
+        map.sort_by_key(|(_, e)| usize::max_value() - e.len());
+    }
+
+    for (concept_id, image_ids) in map {
+        write!(output, "{}\t", concept_id)?;
+        if args.include_count {
+            write!(output, "{}\t", image_ids.len())?;
+        }
+        let mut ids = image_ids.into_iter();
+        if let Some(start) = ids.next() {
+            let l: String = ids.fold(start.to_string(), |a, b| {
+                a.to_string() + &args.separator + &b.to_string()
+            });
+            writeln!(output, "{}", l)?;
+        } else {
+            writeln!(output)?;
+        }
+    }
+
     Ok(())
 }
