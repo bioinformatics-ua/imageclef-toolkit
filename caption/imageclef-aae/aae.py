@@ -2,15 +2,13 @@
 
 import tensorflow as tf
 from tensorflow.contrib import gan as tfgan
-from util import add_drift_regularizer, image_grid_summary
-from ae import conv_block, conv_t_block, build_encoder, build_1lvl_generator, code_autoencoder_mse
+from util import add_drift_regularizer, image_grid_summary, gan_loss_by_name
+from ae import conv_block, conv_t_block, build_encoder, build_1lvl_generator, autoencoder_mse, autoencoder_bce
 from aae_train import aegan_model, aegan_train_ops, AEGANModel, AEGANTrainOps
 from AMSGrad import AMSGrad
 
 layer_norm = tf.contrib.layers.layer_norm
 
-conv2d = tf.contrib.layers.conv2d
-conv2d_t = tf.contrib.layers.conv2d_transpose
 fully_connected = tf.contrib.layers.fully_connected
 arg_scope = tf.contrib.framework.arg_scope
 
@@ -53,6 +51,7 @@ def build_aae_harness(image_input: tf.Tensor,
                       encoder_fn,
                       noise_format: str = 'SPHERE',
                       adversarial_training: str = 'WASSERSTEIN',
+                      sample_noise: tf.Tensor = None,
                       no_trainer: bool = False,
                       summarize_activations: bool = False) -> (AEGANModel, tf.Tensor, tf.Tensor, AEGANTrainOps):
     """Build an adversarial auto-encoder's training harness."""
@@ -61,21 +60,32 @@ def build_aae_harness(image_input: tf.Tensor,
     noise_dim = noise.shape.as_list()[1]
     nchannels = image_input.shape.as_list()[3]
     print("Adversarial Auto-Encoder: {}x{} images".format(image_size, image_size))
+    nlevels = {
+        32: 3,
+        64: 4,
+        128: 5,
+        256: 6
+    }[image_size]
 
     # AAE's are inverted from the perspective of a GAN: generated samples are latent codes.
     # So the encoder is the generator's AAE, and the generator is the encoder's AAE.
     def _generator_fn(x):
-        return encoder_fn(x, noise_dim, sphere_regularize=noise_format == 'SPHERE',
-                          add_summary=False, mode='TRAIN')
+        return encoder_fn(x, noise_dim, nlevels=nlevels, sphere_regularize=noise_format == 'SPHERE',
+                          mode='TRAIN')
 
     def _encoder_fn(z):
-        return decoder_fn(z, nchannels=nchannels, mode='TRAIN')
+        return decoder_fn(z, nlevels=nlevels, nchannels=nchannels, mode='TRAIN')
 
     def _discriminator_fn(z, x):
         return discriminator_fn(z, add_drift_loss=True, mode='TRAIN')
 
+    if sample_noise is not None:
+        image_input_noisy = image_input + sample_noise
+    else:
+        image_input_noisy = image_input
+
     gan_model = aegan_model(
-        _generator_fn, _discriminator_fn, _encoder_fn, noise, image_input,
+        _generator_fn, _discriminator_fn, _encoder_fn, noise, image_input_noisy,
         generator_scope='Encoder',  # switching scope names here
         discriminator_scope='Discriminator',
         encoder_scope='Generator',
@@ -95,37 +105,23 @@ def build_aae_harness(image_input: tf.Tensor,
     assert gan_model.discriminator_gen_outputs is not None
     assert gan_model.discriminator_real_outputs is not None
 
-    if adversarial_training == "WASSERSTEIN":
-        gan_loss = tfgan.gan_loss(
-            gan_model,
-            generator_loss_fn=tfgan.losses.wasserstein_generator_loss,
-            discriminator_loss_fn=tfgan.losses.wasserstein_discriminator_loss,
-            gradient_penalty_weight=10.0,
-            add_summaries=True
-        )
-    else:
-        gan_loss = tfgan.gan_loss(
-            gan_model,
-            generator_loss_fn=tfgan.losses.modified_generator_loss,
-            discriminator_loss_fn=tfgan.losses.modified_discriminator_loss,
-            add_summaries=True
-        )
+    gan_loss = gan_loss_by_name(gan_model, adversarial_training, add_summaries=True)
 
     # add auto-encoder reconstruction loss
-    z = image_input
-    encoded_z = gan_model.encoder_gen_outputs
-    rec_loss = code_autoencoder_mse(z, encoded_z)
+    generated_x = gan_model.encoder_gen_outputs
+    rec_loss = autoencoder_mse(image_input, generated_x)
+    tf.summary.scalar('reconstruction_loss', rec_loss)
 
     if no_trainer:
         train_ops = None
     else:
         train_ops = aegan_train_ops(gan_model, gan_loss, rec_loss,
                                     generator_optimizer=AMSGrad(
-                                        1e-4, beta1=0.5, beta2=0.99),
+                                        2e-4, beta1=0.5, beta2=0.999),
                                     discriminator_optimizer=AMSGrad(
-                                        1e-4, beta1=0.5, beta2=0.99),
+                                        2e-4, beta1=0.5, beta2=0.999),
                                     reconstruction_optimizer=AMSGrad(
-                                        1e-4, beta1=0.5, beta2=0.99),
+                                        2e-4, beta1=0.75, beta2=0.999),
                                     summarize_gradients=True
                                     )
 

@@ -16,8 +16,8 @@ def build_faae_harness(image_input: tf.Tensor,
                        discriminator,
                        encoder,
                        generator_learning_rate = 1e-4,
-                       discriminator_learning_rate = 1e-4,
-                       reconstruction_learning_rate = 1e-4,
+                       discriminator_learning_rate = 2e-4,
+                       reconstruction_learning_rate = 5e-5,
                        noise_format: str = 'SPHERE',
                        adversarial_training: str = 'WASSERSTEIN',
                        no_trainer: bool = False,
@@ -26,20 +26,26 @@ def build_faae_harness(image_input: tf.Tensor,
     noise_dim = noise.shape.as_list()[1]
     nchannels = image_input.shape.as_list()[3]
     print("Flipped Adversarial Auto-Encoder: {}x{} images".format(image_size, image_size))
+    nlevels = {
+        32: 3,
+        64: 4,
+        128: 5,
+        256: 6
+    }[image_size]
 
     def _generator_fn(z):
         return generator(
-            z, nchannels=nchannels, add_summaries=True, mode='TRAIN')
+            z, nchannels=nchannels, nlevels=nlevels, add_summaries=True, mode='TRAIN')
 
     def _encoder_fn(x):
         return encoder(
-            x, noise_dim, batch_norm=False, add_summary=False,
+            x, noise_dim, nlevels=nlevels, batch_norm=False, add_summary=False,
             sphere_regularize=(noise_format == 'SPHERE'),
             mode='TRAIN')
 
     def _discriminator_fn(x, z):
         return discriminator(
-            x, z, add_drift_loss=True, batch_norm=False, mode='TRAIN')
+            x, z, nlevels=nlevels, add_drift_loss=True, batch_norm=False, mode='TRAIN')
 
     gan_model = aegan_model(
         _generator_fn, _discriminator_fn, _encoder_fn, image_input, noise,
@@ -68,11 +74,11 @@ def build_faae_harness(image_input: tf.Tensor,
     else:
         train_ops = aegan_train_ops(gan_model, gan_loss, rec_loss,
                                     generator_optimizer=AMSGrad(
-                                        generator_learning_rate, beta1=0.5, beta2=0.99),
+                                        generator_learning_rate, beta1=0.5, beta2=0.999),
                                     discriminator_optimizer=AMSGrad(
-                                        discriminator_learning_rate, beta1=0.5, beta2=0.99),
+                                        discriminator_learning_rate, beta1=0.5, beta2=0.999),
                                     reconstruction_optimizer=AMSGrad(
-                                        reconstruction_learning_rate, beta1=0.5, beta2=0.99),
+                                        reconstruction_learning_rate, beta1=0.5, beta2=0.999),
                                     summarize_gradients=True)
 
     return (gan_model, gan_loss, rec_loss, train_ops)

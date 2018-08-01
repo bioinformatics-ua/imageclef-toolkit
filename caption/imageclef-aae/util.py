@@ -148,6 +148,20 @@ def minibatch_stddev(incoming: tf.Tensor, name="minibatch_stddev") -> tf.Tensor:
         assert out.shape.as_list()[3] == input_shape[3] + 1
         return out
 
+def unit_norm_loss(incoming: tf.Tensor, weight=1e-3, name="z_reg") -> tf.Tensor:
+    "A loss that enforces the given data to have unit norm"
+    assert len(incoming.shape.as_list()) == 2
+    return tf.multiply(tf.abs(tf.nn.l2_loss(incoming) - 1.0), weight, name="z_reg")
+
+
+def add_unit_norm_loss(incoming: tf.Tensor, weight=1e-3, add_summary=False, name="z_reg"):
+    "A loss that enforces the given data to have unit norm"
+    activation_reg = unit_norm_loss(incoming, weight, name=name)
+    tf.add_to_collection(
+        tf.GraphKeys.REGULARIZATION_LOSSES, activation_reg)
+    if add_summary:
+        tf.summary.scalar('z_reg_loss', activation_reg)
+
 
 def drift_loss(incoming, factor=1e-3, weights=1.0, reduction=tf.losses.Reduction.SUM_OVER_BATCH_SIZE, scope=None):
     with tf.name_scope(scope, "drift_loss") as sc:
@@ -194,7 +208,8 @@ def spectral_norm(w, iteration=1):
     w_shape = w.shape.as_list()
     w = tf.reshape(w, [-1, w_shape[-1]])
 
-    u = tf.get_variable("u", [1, w_shape[-1]], initializer=tf.truncated_normal_initializer(), trainable=False)
+    u = tf.get_variable(
+        "u", [1, w_shape[-1]], initializer=tf.truncated_normal_initializer(), trainable=False)
 
     u_hat = u
     v_hat = None
@@ -212,3 +227,113 @@ def spectral_norm(w, iteration=1):
         w_norm = tf.reshape(w_norm, w_shape)
 
     return w_norm
+
+
+@tf.contrib.framework.add_arg_scope
+def conv2d_sn(inputs,
+              num_outputs,
+              kernel_size,
+              stride=1,
+              activation_fn=tf.nn.leaky_relu,
+              normalizer_fn=None,
+              normalizer_params=None,
+              weights_initializer=tf.random_normal_initializer(stddev=0.02),
+              weights_regularizer=None,
+              biases_initializer=tf.zeros_initializer(),
+              biases_regularizer=None,
+              reuse=None,
+              variables_collections=None,
+              outputs_collections=None,
+              trainable=True,
+              scope=None):
+
+    with tf.variable_scope(scope, default_name="conv", reuse=reuse):
+        w = tf.get_variable(
+            "weights",
+            shape=[kernel_size, kernel_size, inputs.get_shape()[-1],
+                   num_outputs],
+            initializer=weights_initializer,
+            regularizer=weights_regularizer,
+            trainable=trainable)
+        if variables_collections:
+            tf.add_to_collections(variables_collections, w)
+        net = tf.nn.conv2d(input=inputs, filter=spectral_norm(w),
+                           strides=[1, stride, stride, 1], padding='SAME')
+
+        if biases_initializer is not None:
+            b = tf.get_variable(
+                "biases", [num_outputs],
+                initializer=biases_initializer,
+                regularizer=biases_regularizer,
+                trainable=trainable)
+            if variables_collections:
+                tf.add_to_collections(variables_collections, b)
+            net = tf.nn.bias_add(net, b)
+
+        if normalizer_fn is not None:
+            normalizer_params = normalizer_params or {}
+            net = normalizer_fn(net, **normalizer_params)
+
+        if activation_fn:
+            net = activation_fn(net)
+
+        if outputs_collections:
+            tf.add_to_collections(outputs_collections, net)
+
+    return net
+
+
+@tf.contrib.framework.add_arg_scope
+def conv2d_t_sn(inputs,
+              num_outputs,
+              kernel_size,
+              stride=1,
+              activation_fn=tf.nn.leaky_relu,
+              normalizer_fn=None,
+              normalizer_params=None,
+              weights_initializer=tf.random_normal_initializer(stddev=0.02),
+              weights_regularizer=None,
+              biases_initializer=tf.zeros_initializer(),
+              biases_regularizer=None,
+              reuse=None,
+              variables_collections=None,
+              outputs_collections=None,
+              trainable=True,
+              scope=None):
+
+    with tf.variable_scope(scope, default_name="dconv", reuse=reuse):
+        x_shape = inputs.get_shape().as_list()
+        output_shape = [x_shape[0], x_shape[1] * stride, x_shape[2] * stride, num_outputs]
+
+        w = tf.get_variable(
+            "weights",
+            shape=[kernel_size, kernel_size, inputs.get_shape()[-1],
+                   num_outputs],
+            initializer=weights_initializer,
+            regularizer=weights_regularizer)
+        if variables_collections:
+            tf.add_to_collections(variables_collections, w)
+        
+        net = tf.nn.conv2d_transpose(
+            inputs, filter=spectral_norm(w), output_shape=output_shape,
+            strides=[1, stride, stride, 1], padding='SAME')
+
+        if biases_initializer is not None:
+            b = tf.get_variable(
+                "biases", [num_outputs],
+                initializer=biases_initializer, regularizer=biases_regularizer)
+            if variables_collections:
+                tf.add_to_collections(variables_collections, b)
+            net = tf.nn.bias_add(net, b)
+
+        if normalizer_fn is not None:
+            normalizer_params = normalizer_params or {}
+            net = normalizer_fn(net, **normalizer_params)
+
+        if activation_fn:
+            net = activation_fn(net)
+
+        if outputs_collections:
+            tf.add_to_collections(outputs_collections, net)
+
+    return net

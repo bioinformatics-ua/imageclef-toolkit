@@ -3,7 +3,7 @@
 
 import tensorflow as tf
 from tensorflow.contrib import gan as tfgan
-from util import add_drift_regularizer, image_summaries_generated, image_grid_summary, minibatch_stddev, gan_loss_by_name
+from util import add_drift_regularizer, image_summaries_generated, image_grid_summary, minibatch_stddev, gan_loss_by_name, conv2d_sn, conv2d_t_sn
 from ae import conv_block, conv_t_block, build_dcgan_encoder, build_dcgan_generator, build_encoder, build_1lvl_generator, code_autoencoder_mse_cosine
 from AMSGrad import AMSGrad
 
@@ -16,7 +16,7 @@ arg_scope = tf.contrib.framework.arg_scope
 
 
 def build_dcgan_discriminator(
-        x: tf.Tensor, z: tf.Tensor,
+        x: tf.Tensor, z: tf.Tensor, nlevels: int = 4,
         add_drift_loss: bool = True, batch_norm: bool = True,
         input_noise_factor: float = 0., hidden_noise_factor: float = 0.25,
         add_summaries: bool = False, mode=None):
@@ -46,11 +46,10 @@ def build_dcgan_discriminator(
                        normalizer_params=norm_params,
                        activation_fn=tf.nn.leaky_relu):
             # uncomment the line below for 64x64 resolution
-            net = conv2d(net, 128, 5, 2)  # Bx32x32x128
-            net = conv2d(net, 256, 5, 2)  # Bx16x16x256
-            net = conv2d(net, 512, 5, 2)  # Bx8x8x512
-            net = tf.layers.dropout(net, rate=hidden_noise_factor)
-            net = conv2d(net, 1024, 5, 2)  # Bx4x4x1024
+            nb = 1024 >> (nlevels - 1)
+            for _ in range(nlevels - 1):
+                net = conv2d(net, nb, 5, 2)
+                nb *= 2
             net = tf.layers.dropout(net, rate=hidden_noise_factor)
         net = minibatch_stddev(net)  # add stddev to minibatch
         assert net.shape.as_list()[1:4] == [4, 4, 1025]
@@ -62,11 +61,15 @@ def build_dcgan_discriminator(
 
 
 def build_discriminator_1lvl(
-        x: tf.Tensor, z: tf.Tensor,
-        add_drift_loss: bool = True, batch_norm: bool = True,
+        x: tf.Tensor, z: tf.Tensor, nlevels: int = 4,
+        add_drift_loss: bool = True,
+        batch_norm: bool = False,
+        spectral_norm: bool = True,
         input_noise_factor: float = 0., hidden_noise_factor: float = 0.25,
         add_summaries: bool = False, mode=None):
     "1-level discriminator"
+    assert (x.shape.as_list()[1] >> nlevels) == 4
+    assert not (batch_norm is True and spectral_norm is True)
 
     if batch_norm:
         norm_fn = tf.contrib.layers.batch_norm
@@ -85,20 +88,22 @@ def build_discriminator_1lvl(
     # collect all activations and trainable variables
     with arg_scope([fully_connected, conv2d], outputs_collections=[tf.GraphKeys.ACTIVATIONS],
                    variables_collections=[tf.GraphKeys.TRAINABLE_VARIABLES],
-                   weights_initializer=tf.random_normal_initializer(stddev=0.02)):
+                   weights_initializer=tf.random_normal_initializer(
+                       stddev=0.02),
+                   biases_initializer=None):
         net = x_noisy
         # use batch norm and leaky ReLU on all body layers
         with arg_scope([conv2d], normalizer_fn=norm_fn,
                        normalizer_params=norm_params,
                        activation_fn=tf.nn.leaky_relu):
-            net = conv_block(net, [32, 64])  # Bx32x32x64
-            net = conv_block(
-                net, [64, 128])  # Bx16x16x128
-            net = conv_block(
-                net, [128, 256], dropout=hidden_noise_factor)  # Bx8x8x256
-            net = conv_block(
-                net, [256, 512], dropout=hidden_noise_factor)  # Bx4x4x512
+            nb = 512 >> nlevels
+            for i in range(nlevels):
+                nf = hidden_noise_factor if i == nlevels - 1 else None
+                net = conv_block(net, [nb, nb * 2],
+                                 spectral_norm=spectral_norm, dropout=nf)
+                nb *= 2
         net = minibatch_stddev(net)  # add stddev to minibatch
+
         net = tf.reshape(net, [-1, 4 * 4 * 513])
         net = fully_connected(net, 1, activation_fn=None)
         if add_drift_loss:
@@ -158,25 +163,30 @@ def build_gan_harness(image_input: tf.Tensor,
                       noise: tf.Tensor,
                       generator,
                       discriminator,
-                      generator_learning_rate=2e-4,
+                      generator_learning_rate=5e-5,
                       discriminator_learning_rate=2e-4,
                       noise_format: str = 'SPHERE',
                       adversarial_training: str = 'WASSERSTEIN',
                       no_trainer: bool = False,
                       summarize_activations: bool = False) -> tuple:
     image_size = image_input.shape.as_list()[1]
-    noise_dim = noise.shape.as_list()[1]
     nchannels = image_input.shape.as_list()[3]
     print("Plain Generative Adversarial Network: {}x{} images".format(
         image_size, image_size))
+    nlevels = {
+        32: 3,
+        64: 4,
+        128: 5,
+        256: 6
+    }[image_size]
 
     def _generator_fn(z):
         return generator(
-            z, nchannels=nchannels, add_summaries=True, mode='TRAIN')
+            z, nchannels=nchannels, nlevels=nlevels, batch_norm=True, add_summaries=True, mode='TRAIN')
 
     def _discriminator_fn(x, z):
         return discriminator(
-            x, z, add_drift_loss=True, batch_norm=False, mode='TRAIN')
+            x, z, nlevels=nlevels, add_drift_loss=True, mode='TRAIN')
 
     gan_model = tfgan.gan_model(
         _generator_fn, _discriminator_fn, image_input, noise,
@@ -190,7 +200,8 @@ def build_gan_harness(image_input: tf.Tensor,
         tf.contrib.layers.summarize_activations()
     tf.contrib.layers.summarize_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
 
-    gan_loss = gan_loss_by_name(gan_model, adversarial_training, add_summaries=True)
+    gan_loss = gan_loss_by_name(
+        gan_model, adversarial_training, add_summaries=True)
 
     if no_trainer:
         train_ops = None
@@ -202,3 +213,38 @@ def build_gan_harness(image_input: tf.Tensor,
                                             discriminator_learning_rate, beta1=0.5, beta2=0.999),
                                         summarize_gradients=True)
     return (gan_model, gan_loss, train_ops)
+
+
+def build_sndcgan_discriminator(x: tf.Tensor, z: tf.Tensor, nlevels: int = 4, conv_activation_fn=tf.nn.leaky_relu,
+                                spectral_norm: bool = True, add_summaries=False, mode=None):
+    """Build a discriminator based on SNDCGAN, presented in:
+        Miyato et al. Spectral Normalization for generative adversarial networks (2018)
+
+    Args:
+      x : the real data [B, H, W, C]
+      z : the prior code [B, N]
+      nlevels : number of upsampling network levels (4 for 64x64, 5 for 128x128, etc.)
+      conv_activation_fn : a function for the non-linearity operation after each hidden convolution layer
+      spectral_norm : whether to use spectral normalization
+      add_summaries : whether to produce summary operations
+      mode : set to 'TRAIN' during the training process
+    """
+    if spectral_norm:
+        conv2d = conv2d_sn
+
+    net = z
+    with arg_scope([fully_connected, conv2d, conv2d_t], outputs_collections=[tf.GraphKeys.ACTIVATIONS],
+                   variables_collections=[tf.GraphKeys.TRAINABLE_VARIABLES],
+                   weights_initializer=tf.random_normal_initializer(stddev=0.02)):
+        # use leaky ReLU and pixelwise norm on all conv layers (except the head)
+        with arg_scope([conv2d, conv2d_t], activation_fn=conv_activation_fn):
+            nb = 64
+            for _ in range(nlevels):
+                net = conv2d(net, nb, 3, 1)
+                net = conv2d(net, nb, 4, 2)
+                nb = nb * 2
+
+            net = conv2d(net, nb, 3, 1)
+            net = tf.reshape(net, [-1, 4 * 4 * nb])
+        net = fully_connected(net, 1, activation_fn=None, scope="y")
+    return net
