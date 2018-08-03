@@ -293,5 +293,7 @@ if DO_SAVE:
     save()
 
 if DO_EVAL:
-    assert TEST_DATA_DIR is not None, "Testing set directory required for GAN evaluation"
+    if TEST_DATA_DIR is None:
+        print("Testing set directory required for GAN evaluation")
+    else:
     gan_eval(model, TEST_DATA_DIR)
