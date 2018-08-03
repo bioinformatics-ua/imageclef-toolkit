@@ -117,14 +117,19 @@ def random_hypersphere(shape, name="random_hypersphere") -> tf.Tensor:
         return tf.nn.l2_normalize(normal, axis=1)
 
 
-def random_noise(shape, format, name="random_noise") -> tf.Tensor:
+def random_noise(shape, dist, name="random_noise") -> tf.Tensor:
     assert len(shape) == 2
-    if format == "SPHERE":
+    k = shape[1]
+    if dist == "SPHERE":
         return random_hypersphere(shape, name=name)
-    elif format == "UNIFORM":
+    elif dist == "UNIFORM":
         return tf.random_uniform(shape, minval=-1.0, maxval=1.0, name=name)
-    elif format == "NORMAL":
+    elif dist == "NORMAL":
         return tf.random_normal(shape, mean=0.0, stddev=1.0, name=name)
+    elif dist == "CATEGORICAL":
+        return tf.distributions.Categorical(logits=[0.] * k, dtype=tf.float32).sample(shape)
+    elif dist == "BERNOULLI":
+        return tf.distributions.Bernoulli(logits=[0.] * k, dtype=tf.float32).sample(shape)
 
 
 def minibatch_stddev(incoming: tf.Tensor, name="minibatch_stddev") -> tf.Tensor:

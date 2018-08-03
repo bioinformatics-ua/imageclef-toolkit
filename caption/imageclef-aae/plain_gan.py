@@ -159,6 +159,41 @@ def build_discriminator_2lvl(x, z, add_drift_loss=True, noise_factor=0.25, mode=
     return net
 
 
+def build_sndcgan_discriminator(x: tf.Tensor, z: tf.Tensor, nlevels: int = 4, conv_activation_fn=tf.nn.leaky_relu,
+                                spectral_norm: bool = True, add_summaries=False, mode=None):
+    """Build a discriminator based on SNDCGAN, presented in:
+        Miyato et al. Spectral Normalization for generative adversarial networks (2018)
+
+    Args:
+      x : the real data [B, H, W, C]
+      z : the prior code [B, N]
+      nlevels : number of upsampling network levels (4 for 64x64, 5 for 128x128, etc.)
+      conv_activation_fn : a function for the non-linearity operation after each hidden convolution layer
+      spectral_norm : whether to use spectral normalization
+      add_summaries : whether to produce summary operations
+      mode : set to 'TRAIN' during the training process
+    """
+    if spectral_norm:
+        conv2d = conv2d_sn
+
+    net = z
+    with arg_scope([fully_connected, conv2d, conv2d_t], outputs_collections=[tf.GraphKeys.ACTIVATIONS],
+                   variables_collections=[tf.GraphKeys.TRAINABLE_VARIABLES],
+                   weights_initializer=tf.random_normal_initializer(stddev=0.02)):
+        # use leaky ReLU and pixelwise norm on all conv layers (except the head)
+        with arg_scope([conv2d, conv2d_t], activation_fn=conv_activation_fn):
+            nb = 64
+            for _ in range(nlevels):
+                net = conv2d(net, nb, 3, 1)
+                net = conv2d(net, nb, 4, 2)
+                nb = nb * 2
+
+            net = conv2d(net, nb, 3, 1)
+            net = tf.reshape(net, [-1, 4 * 4 * nb])
+        net = fully_connected(net, 1, activation_fn=None, scope="y")
+    return net
+
+
 def build_gan_harness(image_input: tf.Tensor,
                       noise: tf.Tensor,
                       generator,
@@ -214,37 +249,57 @@ def build_gan_harness(image_input: tf.Tensor,
                                         summarize_gradients=True)
     return (gan_model, gan_loss, train_ops)
 
+def build_infogan_harness(image_input: tf.Tensor,
+                          unstructured_noise: tf.Tensor,
+                          structured_noise: tf.Tensor,
+                          generator,
+                          discriminator,
+                          generator_learning_rate=5e-5,
+                          discriminator_learning_rate=2e-4,
+                          adversarial_training: str = 'NS',
+                          no_trainer: bool = False,
+                          summarize_activations: bool = False) -> tuple:
+    image_size = image_input.shape.as_list()[1]
+    nchannels = image_input.shape.as_list()[3]
+    print("Plain Generative Adversarial Network: {}x{} images".format(
+        image_size, image_size))
+    nlevels = {
+        32: 3,
+        64: 4,
+        128: 5,
+        256: 6
+    }[image_size]
 
-def build_sndcgan_discriminator(x: tf.Tensor, z: tf.Tensor, nlevels: int = 4, conv_activation_fn=tf.nn.leaky_relu,
-                                spectral_norm: bool = True, add_summaries=False, mode=None):
-    """Build a discriminator based on SNDCGAN, presented in:
-        Miyato et al. Spectral Normalization for generative adversarial networks (2018)
+    def _generator_fn(z):
+        return generator(
+            z, nchannels=nchannels, nlevels=nlevels, batch_norm=True, add_summaries=True, mode='TRAIN')
 
-    Args:
-      x : the real data [B, H, W, C]
-      z : the prior code [B, N]
-      nlevels : number of upsampling network levels (4 for 64x64, 5 for 128x128, etc.)
-      conv_activation_fn : a function for the non-linearity operation after each hidden convolution layer
-      spectral_norm : whether to use spectral normalization
-      add_summaries : whether to produce summary operations
-      mode : set to 'TRAIN' during the training process
-    """
-    if spectral_norm:
-        conv2d = conv2d_sn
+    def _discriminator_fn(x, z):
+        return discriminator(
+            x, z, nlevels=nlevels, add_drift_loss=True, mode='TRAIN')
 
-    net = z
-    with arg_scope([fully_connected, conv2d, conv2d_t], outputs_collections=[tf.GraphKeys.ACTIVATIONS],
-                   variables_collections=[tf.GraphKeys.TRAINABLE_VARIABLES],
-                   weights_initializer=tf.random_normal_initializer(stddev=0.02)):
-        # use leaky ReLU and pixelwise norm on all conv layers (except the head)
-        with arg_scope([conv2d, conv2d_t], activation_fn=conv_activation_fn):
-            nb = 64
-            for _ in range(nlevels):
-                net = conv2d(net, nb, 3, 1)
-                net = conv2d(net, nb, 4, 2)
-                nb = nb * 2
+    gan_model = tfgan.infogan_model(
+        _generator_fn, _discriminator_fn, image_input,
+        unstructured_noise, structured_noise,
+        generator_scope='Generator',
+        discriminator_scope='Discriminator')
 
-            net = conv2d(net, nb, 3, 1)
-            net = tf.reshape(net, [-1, 4 * 4 * nb])
-        net = fully_connected(net, 1, activation_fn=None, scope="y")
-    return net
+    sampled_x = gan_model.generated_data
+    image_grid_summary(sampled_x, grid_size=4, name='generated_data')
+    if summarize_activations:
+        tf.contrib.layers.summarize_activations()
+    tf.contrib.layers.summarize_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
+
+    gan_loss = gan_loss_by_name(
+        gan_model, adversarial_training, add_summaries=True)
+
+    if no_trainer:
+        train_ops = None
+    else:
+        train_ops = tfgan.gan_train_ops(gan_model, gan_loss,
+                                        generator_optimizer=AMSGrad(
+                                            generator_learning_rate, beta1=0.5, beta2=0.999),
+                                        discriminator_optimizer=AMSGrad(
+                                            discriminator_learning_rate, beta1=0.5, beta2=0.999),
+                                        summarize_gradients=True)
+    return (gan_model, gan_loss, train_ops)
