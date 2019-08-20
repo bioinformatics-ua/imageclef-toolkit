@@ -1,32 +1,39 @@
-#[macro_use]
-extern crate structopt;
-
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::PathBuf;
 use structopt::StructOpt;
 
-type Result<T> = ::std::result::Result<T, Box<::std::error::Error>>;
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 #[derive(StructOpt, Debug)]
 struct VocabularyArgs {
+    /// Concept ground truth file(s)
     #[structopt(name = "FILE", parse(from_os_str))]
     files: Vec<PathBuf>,
 
-    #[structopt(long = "no-frequency", help = "Only print concept names in order")]
+    /// Omit frequency column, only print concept names in order
+    #[structopt(long = "no-frequency")]
     no_frequency: bool,
 
-    #[structopt(short = "o", long = "output", default_value = "vocabulary.csv", parse(from_os_str))]
+    /// Path to the output file
+    #[structopt(
+        short = "o",
+        long = "output",
+        default_value = "vocabulary.csv",
+        parse(from_os_str)
+    )]
     output: PathBuf,
 }
 
 #[derive(StructOpt, Debug)]
 struct ConvertArgs {
+    /// Concept ground truth file(s)
     #[structopt(name = "FILE", parse(from_os_str))]
     file: PathBuf,
 
-    #[structopt(long = "no-frequency", help = "Only print concept names in order")]
+    /// Omit frequency column, only print concept names in order
+    #[structopt(long = "no-frequency")]
     no_frequency: bool,
 
     #[structopt(
@@ -37,48 +44,72 @@ struct ConvertArgs {
     )]
     vocabulary: PathBuf,
 
+    /// Path to the output file
     #[structopt(short = "o", long = "output", parse(from_os_str))]
     output: PathBuf,
-}
 
-#[derive(StructOpt, Debug)]
-struct TransposeArgs {
-    #[structopt(name = "FILE", parse(from_os_str))]
-    file: PathBuf,
-
+    /// Delimiter of image IDs in the output file
     #[structopt(
-        short = "o", long = "output", default_value = "inverse-map.csv", parse(from_os_str)
+        long = "separator",
+        default_value = ","
     )]
-    output: PathBuf,
-
-    #[structopt(long = "sort-image-ids", help = "Sort image IDs in each concept")]
-    sort_image_ids: bool,
-
-    #[structopt(long = "sort-concepts", help = "Sort concepts by descending image count")]
-    sort_concepts: bool,
-
-    #[structopt(long = "include-count", help = "Add image count as the output's second column")]
-    include_count: bool,
-
-    #[structopt(long = "separator", default_value = ",", help = "The concept delimiter")]
     separator: String,
 }
 
 #[derive(StructOpt, Debug)]
-#[structopt(name = "concept_count", about = "ImageCLEFcaption concept counting and processing")]
+struct TransposeArgs {
+    /// Concept ground truth file(s)
+    #[structopt(name = "FILE", parse(from_os_str))]
+    file: PathBuf,
+
+    /// Path to the output file
+    #[structopt(
+        short = "o",
+        long = "output",
+        default_value = "inverse-map.csv",
+        parse(from_os_str)
+    )]
+    output: PathBuf,
+
+    /// Sort image IDs in each concept
+    #[structopt(long = "sort-image-ids")]
+    sort_image_ids: bool,
+
+    /// Sort concepts by descending image count
+    #[structopt(long = "sort-concepts")]
+    sort_concepts: bool,
+
+    /// Add image count as the output's second column
+    #[structopt(long = "include-count")]
+    include_count: bool,
+
+    /// Delimiter of image IDs in the output file
+    #[structopt(
+        long = "separator",
+        default_value = ","
+    )]
+    separator: String,
+}
+
+/// ImageCLEF Caption concept counting and processing
+#[derive(StructOpt, Debug)]
 enum ConceptCount {
     #[structopt(
-        name = "vocabulary", about = "Create the full vocabulary of concepts and their frequency."
+        name = "vocabulary",
+        about = "Create the full vocabulary of concepts and their frequency"
     )]
     Vocabulary(VocabularyArgs),
 
     #[structopt(
         name = "convert",
-        about = "Convert the file of lists of concepts into a file of lists of concept ids."
+        about = "Convert the file of lists of concepts into a file of lists of concept IDs"
     )]
     Convert(ConvertArgs),
 
-    #[structopt(name = "transpose", about = "Create an inverse mapping of concepts to ids.")]
+    #[structopt(
+        name = "transpose",
+        about = "Create an inverse mapping of concepts to IDs"
+    )]
     Transpose(TransposeArgs),
 }
 
@@ -89,7 +120,8 @@ fn main() {
         ConceptCount::Vocabulary(args) => command_vocabulary(&args),
         ConceptCount::Convert(args) => command_convert(&args),
         ConceptCount::Transpose(args) => command_transpose(&args),
-    }.unwrap()
+    }
+    .unwrap()
 }
 
 fn command_vocabulary(args: &VocabularyArgs) -> Result<()> {
@@ -165,7 +197,8 @@ fn command_convert(args: &ConvertArgs) -> Result<()> {
         let split = l.split_at(i);
         let (id, row) = (split.0.to_string(), split.1[1..].to_string());
 
-        let list = row.as_str()
+        let list = row
+            .as_str()
             .split(',')
             .filter(|t| !t.is_empty())
             .map(|t| t.to_string())
@@ -180,7 +213,7 @@ fn command_convert(args: &ConvertArgs) -> Result<()> {
         let mut ids = concept_ids.into_iter();
         if let Some(start) = ids.next() {
             let l: String = ids.fold(start.to_string(), |a, b| {
-                a.to_string() + "," + &b.to_string()
+                a.to_string() + &args.separator + &b.to_string()
             });
             write!(output, "{}", l)?;
         }
