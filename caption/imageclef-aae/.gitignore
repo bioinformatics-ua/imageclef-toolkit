@@ -1,6 +1,7 @@
-/CaptionTraining2018/
-/CaptionTesting2018/
-/__pycache__/
+/data/
+__pycache__/
+.vscode/
 /profile/
 /summaries/
 /saved_model/
+/venv/

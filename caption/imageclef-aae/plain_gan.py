@@ -3,9 +3,11 @@
 
 import tensorflow as tf
 from tensorflow.contrib import gan as tfgan
-from util import add_drift_regularizer, image_summaries_generated, image_grid_summary, minibatch_stddev, gan_loss_by_name, conv2d_sn, conv2d_t_sn
+from util import add_drift_regularizer, image_summaries_generated, image_grid_summary, minibatch_stddev, conv2d_sn, conv2d_t_sn
 from ae import conv_block, conv_t_block, build_dcgan_encoder, build_dcgan_generator, build_encoder, build_1lvl_generator, code_autoencoder_mse_cosine
 from AMSGrad import AMSGrad
+from rel_loss import relativistic_average_discriminator_loss, relativistic_average_generator_loss
+from fm import feature_matching_loss, FEATURE_MATCH
 
 batch_norm = tf.contrib.layers.batch_norm
 conv2d = tf.contrib.layers.conv2d
@@ -47,9 +49,12 @@ def build_dcgan_discriminator(
                        activation_fn=tf.nn.leaky_relu):
             # uncomment the line below for 64x64 resolution
             nb = 1024 >> (nlevels - 1)
-            for _ in range(nlevels - 1):
+            for i in range(nlevels - 1):
                 net = conv2d(net, nb, 5, 2)
                 nb *= 2
+                if i - 1 == nlevels // 2:
+                    tf.add_to_collection(FEATURE_MATCH, net) # so it can be fetched for feature matching
+
             net = tf.layers.dropout(net, rate=hidden_noise_factor)
         net = minibatch_stddev(net)  # add stddev to minibatch
         assert net.shape.as_list()[1:4] == [4, 4, 1025]
@@ -175,18 +180,21 @@ def build_sndcgan_discriminator(x: tf.Tensor, z: tf.Tensor, nlevels: int = 4, co
     """
     if spectral_norm:
         conv2d = conv2d_sn
+    assert len(x.shape.as_list()) == 4
 
-    net = z
+    net = x
     with arg_scope([fully_connected, conv2d, conv2d_t], outputs_collections=[tf.GraphKeys.ACTIVATIONS],
                    variables_collections=[tf.GraphKeys.TRAINABLE_VARIABLES],
                    weights_initializer=tf.random_normal_initializer(stddev=0.02)):
         # use leaky ReLU and pixelwise norm on all conv layers (except the head)
         with arg_scope([conv2d, conv2d_t], activation_fn=conv_activation_fn):
             nb = 64
-            for _ in range(nlevels):
+            for i in range(nlevels):
                 net = conv2d(net, nb, 3, 1)
                 net = conv2d(net, nb, 4, 2)
-                nb = nb * 2
+                nb = min(nb * 2, 512)
+                if i == nlevels - 1:
+                    tf.add_to_collection(FEATURE_MATCH, net) # so it can be fetched for feature matching
 
             net = conv2d(net, nb, 3, 1)
             net = tf.reshape(net, [-1, 4 * 4 * nb])
@@ -194,34 +202,94 @@ def build_sndcgan_discriminator(x: tf.Tensor, z: tf.Tensor, nlevels: int = 4, co
     return net
 
 
+def gan_loss(
+        gan_model: tfgan.GANModel,
+        generator_loss_fn=tfgan.losses.modified_generator_loss,
+        discriminator_loss_fn=tfgan.losses.modified_discriminator_loss,
+        gradient_penalty_weight=None,
+        gradient_penalty_epsilon=1e-10,
+        gradient_penalty_target=1.0,
+        feature_matching=False,
+        add_summaries=False):
+    """ Create A GAN loss set, with support for feature matching.
+    Args:
+        bigan_model: the model
+        feature_matching: Whether to add a feature matching loss to the encoder
+      and generator.
+    """
+    gan_loss = tfgan.gan_loss(
+        gan_model,
+        generator_loss_fn=generator_loss_fn,
+        discriminator_loss_fn=discriminator_loss_fn,
+        gradient_penalty_weight=gradient_penalty_weight,
+        gradient_penalty_target=1.0,
+        add_summaries=add_summaries)
+
+    if feature_matching:
+        fm_loss = feature_matching_loss(scope=gan_model.discriminator_scope.name)
+        if add_summaries:
+            tf.summary.scalar("feature_matching_loss", fm_loss)
+        # or combine the original adversarial loss with FM
+        gen_loss = gan_loss.generator_loss + fm_loss
+        disc_loss = gan_loss.discriminator_loss
+        gan_loss = tfgan.GANLoss(gen_loss, disc_loss)
+
+    return gan_loss
+
+
+def gan_loss_by_name(gan_model: tfgan.GANModel, name: str, feature_matching=False, add_summaries=True, wasserstein_penalty_weight=10.0):
+    if name == "WASSERSTEIN":
+        return gan_loss(
+            gan_model,
+            generator_loss_fn=tfgan.losses.wasserstein_generator_loss,
+            discriminator_loss_fn=tfgan.losses.wasserstein_discriminator_loss,
+            gradient_penalty_weight=wasserstein_penalty_weight,
+            feature_matching=feature_matching,
+            add_summaries=add_summaries
+        )
+    elif name == "RELATIVISTIC_AVG":
+        return gan_loss(
+            gan_model,
+            generator_loss_fn=relativistic_average_generator_loss,
+            discriminator_loss_fn=relativistic_average_discriminator_loss,
+            feature_matching=feature_matching,
+            add_summaries=add_summaries
+        )
+    return gan_loss(
+        gan_model,
+        generator_loss_fn=tfgan.losses.modified_generator_loss,
+        discriminator_loss_fn=tfgan.losses.modified_discriminator_loss,
+        feature_matching=feature_matching,
+        add_summaries=add_summaries
+    )
+
+
+def basic_accuracy(labels: tf.Tensor, logits: tf.Tensor) -> tf.Tensor:
+    preds = tf.clip_by_value(tf.math.sign(logits), 0, 1)
+    trues = tf.math.count_nonzero(tf.math.equal(labels, preds), dtype=tf.float32)
+    return trues / tf.cast(tf.shape(labels)[0], tf.float32)
+
+
 def build_gan_harness(image_input: tf.Tensor,
                       noise: tf.Tensor,
-                      generator,
-                      discriminator,
-                      generator_learning_rate=5e-5,
-                      discriminator_learning_rate=2e-4,
+                      generator: tf.keras.Model,
+                      discriminator: tf.keras.Model,
+                      generator_learning_rate=0.01,
+                      discriminator_learning_rate=0.01,
                       noise_format: str = 'SPHERE',
                       adversarial_training: str = 'WASSERSTEIN',
+                      feature_matching: bool = False,
                       no_trainer: bool = False,
                       summarize_activations: bool = False) -> tuple:
     image_size = image_input.shape.as_list()[1]
     nchannels = image_input.shape.as_list()[3]
-    print("Plain Generative Adversarial Network: {}x{} images".format(
-        image_size, image_size))
-    nlevels = {
-        32: 3,
-        64: 4,
-        128: 5,
-        256: 6
-    }[image_size]
-
+    print("Plain Generative Adversarial Network: {}x{}x{} images".format(
+        image_size, image_size, nchannels))
     def _generator_fn(z):
-        return generator(
-            z, nchannels=nchannels, nlevels=nlevels, batch_norm=True, add_summaries=True, mode='TRAIN')
+        return generator([z], training=True)
 
     def _discriminator_fn(x, z):
-        return discriminator(
-            x, z, nlevels=nlevels, add_drift_loss=True, mode='TRAIN')
+        return discriminator([x, z], training=True)
 
     gan_model = tfgan.gan_model(
         _generator_fn, _discriminator_fn, image_input, noise,
@@ -230,76 +298,28 @@ def build_gan_harness(image_input: tf.Tensor,
         check_shapes=True)  # set to False for 2-level architectures
 
     sampled_x = gan_model.generated_data
-    image_grid_summary(sampled_x, grid_size=4, name='generated_data')
+    image_grid_summary(sampled_x, grid_size=3, name='generated_data')
     if summarize_activations:
         tf.contrib.layers.summarize_activations()
     tf.contrib.layers.summarize_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
 
-    gan_loss = gan_loss_by_name(
-        gan_model, adversarial_training, add_summaries=True)
+    loss = gan_loss_by_name(
+        gan_model, adversarial_training, feature_matching=feature_matching, add_summaries=True)
+
+    if adversarial_training != 'WASSERSTEIN' and adversarial_training != 'RELATIVISTIC_AVG':
+        disc_accuracy_gen = basic_accuracy(tf.zeros_like(gan_model.discriminator_gen_outputs), gan_model.discriminator_gen_outputs)
+        disc_accuracy_real = basic_accuracy(tf.ones_like(gan_model.discriminator_real_outputs), gan_model.discriminator_real_outputs)
+        disc_accuracy = (disc_accuracy_gen + disc_accuracy_real) * 0.5
+        with tf.name_scope('Discriminator'):
+            tf.summary.scalar('accuracy', disc_accuracy)
 
     if no_trainer:
         train_ops = None
     else:
-        train_ops = tfgan.gan_train_ops(gan_model, gan_loss,
-                                        generator_optimizer=AMSGrad(
-                                            generator_learning_rate, beta1=0.5, beta2=0.999),
-                                        discriminator_optimizer=AMSGrad(
-                                            discriminator_learning_rate, beta1=0.5, beta2=0.999),
+        train_ops = tfgan.gan_train_ops(gan_model, loss,
+                                        generator_optimizer=tf.train.AdamOptimizer(
+                                            generator_learning_rate, beta1=0., beta2=0.99),
+                                        discriminator_optimizer=tf.train.AdamOptimizer(
+                                            discriminator_learning_rate, beta1=0., beta2=0.99),
                                         summarize_gradients=True)
-    return (gan_model, gan_loss, train_ops)
-
-def build_infogan_harness(image_input: tf.Tensor,
-                          unstructured_noise: tf.Tensor,
-                          structured_noise: tf.Tensor,
-                          generator,
-                          discriminator,
-                          generator_learning_rate=5e-5,
-                          discriminator_learning_rate=2e-4,
-                          adversarial_training: str = 'NS',
-                          no_trainer: bool = False,
-                          summarize_activations: bool = False) -> tuple:
-    image_size = image_input.shape.as_list()[1]
-    nchannels = image_input.shape.as_list()[3]
-    print("Plain Generative Adversarial Network: {}x{} images".format(
-        image_size, image_size))
-    nlevels = {
-        32: 3,
-        64: 4,
-        128: 5,
-        256: 6
-    }[image_size]
-
-    def _generator_fn(z):
-        return generator(
-            z, nchannels=nchannels, nlevels=nlevels, batch_norm=True, add_summaries=True, mode='TRAIN')
-
-    def _discriminator_fn(x, z):
-        return discriminator(
-            x, z, nlevels=nlevels, add_drift_loss=True, mode='TRAIN')
-
-    gan_model = tfgan.infogan_model(
-        _generator_fn, _discriminator_fn, image_input,
-        unstructured_noise, structured_noise,
-        generator_scope='Generator',
-        discriminator_scope='Discriminator')
-
-    sampled_x = gan_model.generated_data
-    image_grid_summary(sampled_x, grid_size=4, name='generated_data')
-    if summarize_activations:
-        tf.contrib.layers.summarize_activations()
-    tf.contrib.layers.summarize_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
-
-    gan_loss = gan_loss_by_name(
-        gan_model, adversarial_training, add_summaries=True)
-
-    if no_trainer:
-        train_ops = None
-    else:
-        train_ops = tfgan.gan_train_ops(gan_model, gan_loss,
-                                        generator_optimizer=AMSGrad(
-                                            generator_learning_rate, beta1=0.5, beta2=0.999),
-                                        discriminator_optimizer=AMSGrad(
-                                            discriminator_learning_rate, beta1=0.5, beta2=0.999),
-                                        summarize_gradients=True)
-    return (gan_model, gan_loss, train_ops)
+    return (gan_model, loss, train_ops)

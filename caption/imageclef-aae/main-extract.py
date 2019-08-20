@@ -15,6 +15,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--model_dir', type=str,
                     help='Directory where the saved model is contained.')
 parser.add_argument('--batch_size', type=int, default=64)
+parser.add_argument('--image_size', type=int, default=64)
 
 parser.add_argument('--data_dir', default='CaptionTraining2018',
                     help='The directory containing the images to extract features.')
@@ -44,14 +45,15 @@ with tf.Session(graph=tf.Graph()) as sess:
 
     x = sess.graph.get_tensor_by_name(xdef.name)
     z = sess.graph.get_tensor_by_name(zdef.name)
-    print('x:', x)
-    print('z:', z)
+    if FLAGS.debug:
+        print('x:', x)
+        print('z:', z)
 
     if FLAGS.no:
         sys.exit(0)
 
     dataset = get_dataset_dir_with_ids(
-        FLAGS.data_dir, batch_size=FLAGS.batch_size, resizeto=64, cropto=None, shuffle=False, repeat=False)
+        FLAGS.data_dir, batch_size=FLAGS.batch_size, resizeto=FLAGS.image_size, cropto=None, shuffle=False, repeat=False)
     next_element = dataset.make_one_shot_iterator().get_next()
 
     n_samples = len(os.listdir(FLAGS.data_dir))

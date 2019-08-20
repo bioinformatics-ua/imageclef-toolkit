@@ -2,45 +2,17 @@
 
 import tensorflow as tf
 from tensorflow.contrib import gan as tfgan
+from collections import namedtuple
 
 
-class AEGANModel(tfgan.GANModel):
-    def __new__(cls,
-                generator_inputs,
-                generated_data,
-                generator_variables,
-                generator_scope,
-                generator_fn,
-                real_data,
-                discriminator_real_outputs,
-                discriminator_gen_outputs,
-                discriminator_variables,
-                discriminator_scope,
-                discriminator_fn,
-                encoder_real_outputs,
-                encoder_gen_outputs,
-                encoder_variables,
-                encoder_scope,
-                encoder_fn):
-        self = super(AEGANModel, cls).__new__(
-            cls,
-            generator_inputs,
-            generated_data,
-            generator_variables,
-            generator_scope,
-            generator_fn,
-            real_data,
-            discriminator_real_outputs,
-            discriminator_gen_outputs,
-            discriminator_variables,
-            discriminator_scope,
-            discriminator_fn)
-        self.encoder_real_outputs = encoder_real_outputs
-        self.encoder_gen_outputs = encoder_gen_outputs
-        self.encoder_variables = encoder_variables
-        self.encoder_scope = encoder_scope
-        self.encoder_fn = encoder_fn
-        return self
+class AEGANModel(namedtuple('AEGANModel', tfgan.GANModel._fields + (
+    'encoder_real_outputs',
+    'encoder_gen_outputs',
+    'encoder_variables',
+    'encoder_scope',
+    'encoder_fn'
+))):
+    "auto-encoding GAN"
 
 
 def aegan_model(
@@ -94,12 +66,13 @@ def aegan_model(
         encoder_fn)
 
 
-class AEGANTrainOps(tfgan.GANTrainOps):
-    def __new__(cls, gen_train_op, disc_train_op, rec_train_op, global_step_inc):
-        self = super(AEGANTrainOps, cls).__new__(
-            cls, gen_train_op, disc_train_op, global_step_inc)
-        self.rec_train_op = rec_train_op
-        return self
+class AEGANTrainOps(namedtuple('AEGANTrainOps', (
+    "generator_train_op",
+    "discriminator_train_op",
+    "rec_train_op",
+    "global_step_inc_op"
+))):
+    ""
 
 
 def aegan_train_ops(

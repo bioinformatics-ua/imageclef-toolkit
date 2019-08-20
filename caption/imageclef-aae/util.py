@@ -1,33 +1,9 @@
 """Additional utility functions."""
 
 import tensorflow as tf
+import tensorflow_probability as tfp
 from tensorflow.contrib import gan as tfgan
-from rel_loss import relativistic_average_discriminator_loss, relativistic_average_generator_loss
-
-
-def gan_loss_by_name(gan_model: tfgan.GANModel, name: str, add_summaries=True):
-    if name == "WASSERSTEIN":
-        return tfgan.gan_loss(
-            gan_model,
-            generator_loss_fn=tfgan.losses.wasserstein_generator_loss,
-            discriminator_loss_fn=tfgan.losses.wasserstein_discriminator_loss,
-            gradient_penalty_weight=10.0,
-            add_summaries=add_summaries
-        )
-    elif name == "RELATIVISTIC_AVG":
-        return tfgan.gan_loss(
-            gan_model,
-            generator_loss_fn=relativistic_average_generator_loss,
-            discriminator_loss_fn=relativistic_average_discriminator_loss,
-            add_summaries=add_summaries
-        )
-    return tfgan.gan_loss(
-        gan_model,
-        generator_loss_fn=tfgan.losses.modified_generator_loss,
-        discriminator_loss_fn=tfgan.losses.modified_discriminator_loss,
-        add_summaries=add_summaries
-    )
-
+from typing import List
 
 def assert_is_image(data):
     data.shape.assert_has_rank(4)
@@ -126,10 +102,14 @@ def random_noise(shape, dist, name="random_noise") -> tf.Tensor:
         return tf.random_uniform(shape, minval=-1.0, maxval=1.0, name=name)
     elif dist == "NORMAL":
         return tf.random_normal(shape, mean=0.0, stddev=1.0, name=name)
+    elif dist == "RECTIFIED_NORMAL":
+        return tf.nn.relu(tf.random_normal(shape, mean=0.0, stddev=1.0), name=name)
     elif dist == "CATEGORICAL":
-        return tf.distributions.Categorical(logits=[0.] * k, dtype=tf.float32).sample(shape)
+        return tf.distributions.Categorical(logits=[0.] * k, dtype=tf.float32).sample(shape[0])
     elif dist == "BERNOULLI":
-        return tf.distributions.Bernoulli(logits=[0.] * k, dtype=tf.float32).sample(shape)
+        return tf.distributions.Bernoulli(logits=0., validate_args=True, dtype=tf.float32).sample(shape)
+    elif dist == "CENTERED_BERNOULLI":
+        return tf.distributions.Bernoulli(logits=0., validate_args=True, dtype=tf.float32).sample(shape) * 2. - 1.
 
 
 def minibatch_stddev(incoming: tf.Tensor, name="minibatch_stddev") -> tf.Tensor:

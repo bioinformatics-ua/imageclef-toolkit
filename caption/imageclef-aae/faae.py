@@ -3,7 +3,8 @@
 
 import tensorflow as tf
 from tensorflow.contrib import gan as tfgan
-from util import add_drift_regularizer, image_summaries_generated, image_grid_summary, minibatch_stddev, gan_loss_by_name
+from util import add_drift_regularizer, image_summaries_generated, image_grid_summary, minibatch_stddev
+from plain_gan import gan_loss_by_name
 from ae import conv_block, conv_t_block, build_dcgan_encoder, build_dcgan_generator, build_encoder, build_1lvl_generator, code_autoencoder_mse_cosine
 from aae_train import aegan_model, aegan_train_ops
 from AMSGrad import AMSGrad
@@ -12,9 +13,9 @@ from plain_gan import build_dcgan_discriminator, build_discriminator_1lvl, build
 
 def build_faae_harness(image_input: tf.Tensor,
                        noise: tf.Tensor,
-                       generator,
-                       discriminator,
-                       encoder,
+                       generator: tf.keras.Model,
+                       discriminator: tf.keras.Model,
+                       encoder: tf.keras.Model,
                        generator_learning_rate = 1e-4,
                        discriminator_learning_rate = 2e-4,
                        reconstruction_learning_rate = 5e-5,
@@ -23,29 +24,16 @@ def build_faae_harness(image_input: tf.Tensor,
                        no_trainer: bool = False,
                        summarize_activations: bool = False):
     image_size = image_input.shape.as_list()[1]
-    noise_dim = noise.shape.as_list()[1]
-    nchannels = image_input.shape.as_list()[3]
     print("Flipped Adversarial Auto-Encoder: {}x{} images".format(image_size, image_size))
-    nlevels = {
-        32: 3,
-        64: 4,
-        128: 5,
-        256: 6
-    }[image_size]
 
     def _generator_fn(z):
-        return generator(
-            z, nchannels=nchannels, nlevels=nlevels, add_summaries=True, mode='TRAIN')
+        return generator([z], training=True)
 
     def _encoder_fn(x):
-        return encoder(
-            x, noise_dim, nlevels=nlevels, batch_norm=False, add_summary=False,
-            sphere_regularize=(noise_format == 'SPHERE'),
-            mode='TRAIN')
+        return encoder([x], training=True)
 
     def _discriminator_fn(x, z):
-        return discriminator(
-            x, z, nlevels=nlevels, add_drift_loss=True, batch_norm=False, mode='TRAIN')
+        return discriminator([x, z], training=True)
 
     gan_model = aegan_model(
         _generator_fn, _discriminator_fn, _encoder_fn, image_input, noise,
@@ -55,7 +43,7 @@ def build_faae_harness(image_input: tf.Tensor,
         check_shapes=True)  # set to False for 2-level architectures
 
     sampled_x = gan_model.generated_data
-    image_grid_summary(sampled_x, grid_size=4, name='generated_data')
+    image_grid_summary(sampled_x, grid_size=3, name='generated_data')
     if summarize_activations:
         tf.contrib.layers.summarize_activations()
     tf.contrib.layers.summarize_collection(tf.GraphKeys.TRAINABLE_VARIABLES)

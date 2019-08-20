@@ -8,12 +8,13 @@ from tensorflow.python import debug as tf_debug  # pylint: disable=E0611
 from tensorflow import saved_model
 from tensorflow.contrib import gan as tfgan
 from dataset_imagedir import get_dataset_dir
-from util import image_summaries_generated, image_grid_summary, random_noise, upsample_2d, drift_loss, minibatch_stddev, pixelwise_feature_vector_norm
-from ae import build_dcgan_generator, build_sndcgan_generator, build_sndcgan_encoder, build_encoder, build_1lvl_generator, build_dcgan_generator
+from util import image_summaries_generated, image_grid_summary, random_noise, DynamicGANTrainHook
+#from ae import build_dcgan_generator, build_sndcgan_generator, build_sndcgan_encoder, build_encoder, build_1lvl_generator, build_dcgan_generator
+from ae_res import ResGanDiscriminator, ResGanEncoder, ResGanGenerator
 from faae import build_faae_harness
-from aae import build_code_discriminator, build_aae_harness
+from aae import build_code_discriminator, build_aae_harness, CodeDiscriminator
 from aae_train import aegan_model, aegan_train_ops
-from plain_gan import build_gan_harness, build_dcgan_discriminator, build_discriminator_1lvl, build_discriminator_2lvl
+from plain_gan import build_gan_harness, build_sndcgan_discriminator
 from AMSGrad import AMSGrad
 
 tf.logging.set_verbosity(tf.logging.INFO)
@@ -26,14 +27,17 @@ TYPE = "AAE"
 ADVERSARIAL_TRAINING = "RELATIVISTIC_AVG"
 LOSS_TYPE_SUFFIX = {
     "WASSERSTEIN": "_W",
-    "RELATIVISTIC_AVG": "_RaS"
+    "RELATIVISTIC_AVG": "_Ra"
 }.get(ADVERSARIAL_TRAINING) or ""
+# Whether to add feature matching
+FEATURE_MATCHING = False
+FM_SUFFIX = "_FM" if FEATURE_MATCHING else ""
 # The run key to be used
-KEY = "{}{}_RUN1".format(TYPE, LOSS_TYPE_SUFFIX)
+KEY = "{}{}_2019{}_64px_RUN1".format(TYPE, LOSS_TYPE_SUFFIX, FM_SUFFIX)
 # Training data set dir
-DATA_DIR = "CaptionTraining2018"
+DATA_DIR = "data/training-set-small"
 # Testing data set dir
-TEST_DATA_DIR = "CaptionTesting2018"
+TEST_DATA_DIR = "data/validation-set-small"
 # TensorBoard log dir
 LOG_DIR = "summaries/{}".format(KEY)
 # Where to save the model in the end (`KEY` is appended automatically)
@@ -46,14 +50,16 @@ DO_TRAIN = True
 DO_SAVE = True
 # Whether to evaluate the GAN in the end
 DO_EVAL = False
+# Override the batch size used for evaluation
+EVAL_BATCH_SIZE = 8
 # Debug mode
 DEBUG = False
 # Batch size
 BATCH_SIZE = 32
 # The number of dimensions of the prior/latent code
 NOISE_DIMS = 1024
-# The random distribution of the prior code (choices: "SPHERE", "UNIFORM", "NORMAL")
-NOISE_FORMAT = "SPHERE"
+# The random distribution of the prior code (choices: "SPHERE", "UNIFORM", "NORMAL", "RECTIFIED_NORMAL", "CENTERED_BERNOULLI")
+NOISE_FORMAT = "RECTIFIED_NORMAL"
 # The real/generated image size in pixels
 IMAGE_SIZE = 64
 # The extra margin to consider in random cropping: image will be first
@@ -64,9 +70,9 @@ CROP_MARGIN_SIZE = 8
 N_CHANNELS = 3
 # Estimated number of steps per epoch based on batch size and training data size
 # (should be updated based on batch size and training set size)
-STEPS_PER_EPOCH = 223859 // BATCH_SIZE
+STEPS_PER_EPOCH = 56629 // BATCH_SIZE
 # Number of epochs to train
-NUM_EPOCHS = 50
+NUM_EPOCHS = 25
 # Total number of steps to train
 NUM_STEPS = STEPS_PER_EPOCH * NUM_EPOCHS
 # Number of reconstruction steps per iteration
@@ -75,12 +81,13 @@ R_STEPS = 1
 G_STEPS = 1
 # Number of discriminator/critic training steps per iteration
 D_STEPS = 1
+# Base learning rate of the discriminator
+D_LR = 1e-5
+# Base learning rate of the generator (or the AAE's encoder)
+G_LR = 1e-5
+# Base learning rate of the reconstructor (if applicable)
+R_LR = 1e-5
 # ---
-# These constants point to network building functions with a custom prototype.
-# More functions which can be assigned here are available in the modules `ae.py`, `aae.py` and `plain_gan.py`.
-GENERATOR_FN = build_sndcgan_generator
-DISCRIMINATOR_FN = build_code_discriminator
-ENCODER_FN = build_sndcgan_encoder
 
 # the number of levels of each network so that they can handle
 # samples of the intended resolution (4 levels = 64x64, more levels means more resolution).
@@ -93,6 +100,21 @@ NUM_NETWORK_LEVELS = {
     512: 7,
     1024: 8
 }[IMAGE_SIZE]
+
+# These constants point to network building functions with a custom prototype.
+# More functions which can be assigned here are available in the modules `ae.py`, `ae_res.py`, `aae.py` and `plain_gan.py`.
+GENERATOR_FN = ResGanGenerator(channels_out=N_CHANNELS, nlevels=NUM_NETWORK_LEVELS)
+DISCRIMINATOR_FN = CodeDiscriminator()
+ENCODER_FN = ResGanEncoder(
+    channels_out=NOISE_DIMS, nlevels=NUM_NETWORK_LEVELS,
+    last_activation='relu' if NOISE_FORMAT == 'RECTIFIED_NORMAL'
+    else 'tanh' if NOISE_FORMAT == 'CENTERED_BERNOULLI' or NOISE_FORMAT == 'UNIFORM'
+    else None,
+    act_regularizer=tf.keras.regularizers.l1(2e-7) if (
+        NOISE_FORMAT in ['NORMAL', 'RECTIFIED_NORMAL'] and
+        G_STEPS == 0)
+    else None)
+
 # -----------------------------------------------------------------
 
 
@@ -115,6 +137,7 @@ def save(export_dir=None, generator_scope=None, encoder_scope=None):
             generator_scope or "Generator", reuse=True)
         encoder_scope = tf.variable_scope(
             encoder_scope or "Encoder", reuse=True)
+        discriminator_scope = tf.variable_scope("Discriminator", reuse=True)
 
         defmap = {}
 
@@ -124,7 +147,7 @@ def save(export_dir=None, generator_scope=None, encoder_scope=None):
                 x_input = tf.placeholder(
                     tf.float32, shape=[None, IMAGE_SIZE, IMAGE_SIZE, N_CHANNELS])
                 encoded_z = ENCODER_FN(
-                    x_input, NOISE_DIMS, mode='PREDICT')
+                    [x_input], training=False)
             encode_signature_inputs = {
                 "x": saved_model.utils.build_tensor_info(x_input)
             }
@@ -137,7 +160,7 @@ def save(export_dir=None, generator_scope=None, encoder_scope=None):
         # basic generator signature
         with generator_scope:
             z_input = tf.placeholder(tf.float32, shape=[None, NOISE_DIMS])
-            sample = GENERATOR_FN(z_input, nchannels=N_CHANNELS, nlevels=NUM_NETWORK_LEVELS, mode='PREDICT')
+            sample = GENERATOR_FN([z_input], training=False)
         generate_signature_inputs = {
             "z": saved_model.utils.build_tensor_info(z_input)
         }
@@ -147,6 +170,35 @@ def save(export_dir=None, generator_scope=None, encoder_scope=None):
         defmap['generate'] = saved_model.signature_def_utils.build_signature_def(
             generate_signature_inputs, generate_signature_outputs,
             'generate')
+
+        # discriminator's feature-matched activations
+        with discriminator_scope:
+            # clear other tensors, so that we know which one to fetch
+            tf.get_collection_ref(key="feature_match").clear()
+            x_input = tf.placeholder(
+                tf.float32, shape=[None, IMAGE_SIZE, IMAGE_SIZE, N_CHANNELS])
+            code_input = tf.placeholder(
+                tf.float32, shape=[None, NOISE_DIMS])
+            
+            if TYPE == 'AAE':
+                disc_inputs = [code_input]
+            else:
+                disc_inputs = [x_input, code_input]
+            disc_out = DISCRIMINATOR_FN(disc_inputs, training=False)
+            discriminate_signature_inputs = {
+                "x": saved_model.utils.build_tensor_info(x_input),
+                "z": saved_model.utils.build_tensor_info(code_input)
+            }
+            discriminate_signature_outputs = {
+                "out": saved_model.utils.build_tensor_info(disc_out)
+            }
+            if FEATURE_MATCHING:
+                disc_features = tf.get_collection(key="feature_match")[0]
+                discriminate_signature_outputs['features'] = saved_model.utils.build_tensor_info(disc_features)
+
+            defmap['discriminate'] = saved_model.signature_def_utils.build_signature_def(
+                discriminate_signature_inputs, discriminate_signature_outputs,
+                'discriminate')
 
         builder.add_meta_graph_and_variables(
             sess, [saved_model.tag_constants.SERVING],
@@ -169,8 +221,8 @@ def gan_eval(gan_model, test_data_dir, num_batches=16):
     with tf.Session(graph=tf.get_default_graph()) as sess:
         print("Evaluating GAN...")
 
-        test_dataset = get_dataset_dir(test_data_dir, batch_size=BATCH_SIZE, nchannels=3, resizeto=299,
-                                       normalize=True, shuffle=False)
+        test_dataset = get_dataset_dir(test_data_dir, batch_size=EVAL_BATCH_SIZE or BATCH_SIZE,
+                                       nchannels=3, resizeto=299, normalize=True, shuffle=False)
         real_data = test_dataset.make_one_shot_iterator().get_next()
         
         generated_outputs = adapt_to_inception(gan_model.generated_data)
@@ -207,15 +259,21 @@ makedirs(profile_path, exist_ok=True)
 if TYPE == 'AAE':
     (model, loss, rec_loss, train) = build_aae_harness(
         image_input, noise, GENERATOR_FN, DISCRIMINATOR_FN, ENCODER_FN,
-        noise_format=NOISE_FORMAT, adversarial_training=ADVERSARIAL_TRAINING, no_trainer=not DO_TRAIN)
+        noise_format=NOISE_FORMAT, adversarial_training=ADVERSARIAL_TRAINING,
+        discriminator_learning_rate=D_LR, generator_learning_rate=G_LR, reconstruction_learning_rate=R_LR,
+        no_trainer=not DO_TRAIN)
 elif TYPE == 'FAAE':
     (model, loss, rec_loss, train) = build_faae_harness(
         image_input, noise, GENERATOR_FN, DISCRIMINATOR_FN, ENCODER_FN,
-        noise_format=NOISE_FORMAT, adversarial_training=ADVERSARIAL_TRAINING, no_trainer=not DO_TRAIN)
+        noise_format=NOISE_FORMAT, adversarial_training=ADVERSARIAL_TRAINING,
+        no_trainer=not DO_TRAIN)
 elif TYPE == 'GAN':
     (model, loss, train) = build_gan_harness(
         image_input, noise, GENERATOR_FN, DISCRIMINATOR_FN,
-        noise_format=NOISE_FORMAT, adversarial_training=ADVERSARIAL_TRAINING, no_trainer=not DO_TRAIN)
+        noise_format=NOISE_FORMAT, adversarial_training=ADVERSARIAL_TRAINING,
+        feature_matching=FEATURE_MATCHING,
+        discriminator_learning_rate=D_LR, generator_learning_rate=G_LR,
+        no_trainer=not DO_TRAIN)
 else:
     print("Invalid network type", TYPE)
     exit(-1)
@@ -240,17 +298,17 @@ if DO_TRAIN:
             'reconstruction_loss': rec_loss
         }, every_n_iter=10)
 
-    train_hooks = [
-        log_hook,
-        tf.train.StopAtStepHook(num_steps=NUM_STEPS),
-    ]
-
-    if DEBUG:
-        train_hooks.append(
-            tf_debug.TensorBoardDebugHook('localhost:6064')
-        )
-
     r_steps = 0 if TYPE == "GAN" else R_STEPS
+
+    def get_dynamic_train_hooks(handicaps, emergency_thresholds):
+        def get_hooks(train_ops):
+            return [DynamicGANTrainHook(
+                train.global_step_inc_op,
+                [train.discriminator_train_op, train.generator_train_op],
+                [loss.discriminator_loss, loss.generator_loss],
+                handicaps,
+                emergency_thresholds)]
+        return get_hooks
 
     def get_sequential_train_hooks(rec_steps: int = 1, disc_steps: int = 1, gen_steps: int = 1):
         """Returns a hooks function for sequential auto-encoding GAN training.
@@ -264,19 +322,34 @@ if DO_TRAIN:
         A function that takes an AEGANTrainOps tuple and returns a list of hooks.
         """
         assert rec_steps >= 0
-        assert disc_steps > 0
-        assert gen_steps > 0
+        assert disc_steps >= 0
+        assert gen_steps >= 0
         def get_hooks(train_ops):
-            discriminator_hook = tfgan.RunTrainOpsHook(train_ops.discriminator_train_op,
-                                                    disc_steps)
-            generator_hook = tfgan.RunTrainOpsHook(train_ops.generator_train_op,
-                                                gen_steps)
+            hooks = []
+            if disc_steps:
+                discriminator_hook = tfgan.RunTrainOpsHook(
+                    train_ops.discriminator_train_op, disc_steps)
+                hooks.append(discriminator_hook)
+            if gen_steps:
+                generator_hook = tfgan.RunTrainOpsHook(
+                    train_ops.generator_train_op, gen_steps)
+                hooks.append(generator_hook)
             if rec_steps:
-                reconstruction_hook = tfgan.RunTrainOpsHook(train_ops.rec_train_op,
-                                                            rec_steps)
-                return [reconstruction_hook, discriminator_hook, generator_hook]
-            return [discriminator_hook, generator_hook]
+                reconstruction_hook = tfgan.RunTrainOpsHook(
+                    train_ops.rec_train_op, rec_steps)
+                hooks.append(reconstruction_hook)
+            return hooks
         return get_hooks
+
+    train_hooks = [
+        log_hook,
+        tf.train.StopAtStepHook(num_steps=NUM_STEPS),
+    ]
+
+    if DEBUG:
+        train_hooks.append(
+            tf_debug.TensorBoardDebugHook('localhost:6064')
+        )
 
     print("Training process begins: {} steps".format(NUM_STEPS))
     config = tf.ConfigProto()
@@ -285,7 +358,7 @@ if DO_TRAIN:
         logdir=LOG_DIR,
         get_hooks_fn=get_sequential_train_hooks(r_steps, D_STEPS, G_STEPS),
         hooks=train_hooks,
-        save_summaries_steps=100,
+        save_summaries_steps=200,
         save_checkpoint_secs=1200,
         config=config)
 
@@ -296,4 +369,4 @@ if DO_EVAL:
     if TEST_DATA_DIR is None:
         print("Testing set directory required for GAN evaluation")
     else:
-    gan_eval(model, TEST_DATA_DIR)
+        gan_eval(model, TEST_DATA_DIR)

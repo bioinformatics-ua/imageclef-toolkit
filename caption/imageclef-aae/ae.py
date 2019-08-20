@@ -98,6 +98,8 @@ def build_sndcgan_generator(z: tf.Tensor, nchannels: int = N_CHANNELS, nlevels: 
       add_summaries : whether to produce summary operations
       mode : set to 'TRAIN' during the training process
     """
+    assert len(z.shape.as_list()) == 2
+
     is_training = mode == 'TRAIN'
 
     if batch_norm:
@@ -119,15 +121,34 @@ def build_sndcgan_generator(z: tf.Tensor, nchannels: int = N_CHANNELS, nlevels: 
         with arg_scope([conv2d, conv2d_t], activation_fn=conv_activation_fn,
                        normalizer_fn=normalizer_fn, normalizer_params=normalizer_params):
             net = fully_connected(
-                net, 1024 * 4 * 4, activation_fn=None)
-            net = tf.reshape(net, [-1, 4, 4, 1024])  # Bx4x4x1024
+                net, 512 * 4 * 4, activation_fn=None)
+            net = tf.reshape(net, [-1, 4, 4, 512])  # Bx4x4x512
             nb = 512
             for _ in range(nlevels):
                 net = conv2d_t(net, nb, 4, 2)
                 nb = nb // 2
         net = conv2d(net, nchannels, 3, 1,
                      activation_fn=tf.nn.tanh, scope="y")
+    assert len(net.shape.as_list()) == 4
     return net
+
+
+class SNDCGANGenerator(tf.keras.Model):
+
+    def __init__(self, nchannels: int = N_CHANNELS, nlevels: int = 4,
+                 conv_activation=tf.nn.relu, batch_norm: bool = True):
+        tf.keras.Model.__init__(self)
+        self.nchannels = nchannels
+        self.nlevels = nlevels
+        self.conv_activation = conv_activation
+        self.batch_norm = batch_norm
+    
+    def call(self, inputs, training):
+        if isinstance(inputs, list):
+            inputs = inputs[0]
+        return build_sndcgan_generator(
+            inputs, self.nchannels, self.nlevels, conv_activation_fn=self.conv_activation,
+            batch_norm=self.batch_norm, mode='TRAIN' if training else 'PREDICT')
 
 
 def build_1lvl_generator(z: tf.Tensor, nchannels: int = N_CHANNELS, nlevels: int = 4, mode=None) -> tf.Tensor:
@@ -296,6 +317,8 @@ def build_sndcgan_encoder(x: tf.Tensor, noise_dims: int, nlevels: int = 4, conv_
     """Build an encoder based on SNDCGAN discriminator, presented in:
         Miyato et al. Spectral Normalization for generative adversarial networks (2018)
 
+    No spectral normalization is employed, as that is meant to be used for the discriminator.
+    
     The number of kernels, on the other hand, is defined according to:
         Kurach et al. The GAN Landscape: Losses, Architectures, Regularization, and Normalization (2018)
 
@@ -340,6 +363,27 @@ def build_sndcgan_encoder(x: tf.Tensor, noise_dims: int, nlevels: int = 4, conv_
             add_unit_norm_loss(net, weight=2e-3, add_summary=add_summaries and mode == 'TRAIN')
 
     return net
+
+
+class SNDCGANEncoder(tf.keras.Model):
+
+    def __init__(self, channels_out: int = 512, nlevels: int = 4,
+                 conv_activation=tf.nn.relu, batch_norm: bool = True,
+                 sphere_regularize: bool = False):
+        super(SNDCGANEncoder, self).__init__()
+        self.channels_out = channels_out
+        self.nlevels = nlevels
+        self.conv_activation = conv_activation
+        self.batch_norm = batch_norm
+        self.sphere_regularize = sphere_regularize
+    
+    def call(self, inputs, training):
+        if isinstance(inputs, list):
+            inputs = inputs[0]
+        return build_sndcgan_encoder(
+            inputs, self.channels_out, self.nlevels, conv_activation_fn=self.conv_activation,
+            batch_norm=self.batch_norm, sphere_regularize=self.sphere_regularize, add_summaries=training,
+            mode='TRAIN' if training else 'PREDICT')
 
 
 def autoencoder_mse(x, x_decoded, add_summary=False):

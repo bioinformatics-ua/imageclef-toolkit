@@ -4,13 +4,14 @@ Please see `The relativistic discriminator: a key element missing from standard 
     (https://arxiv.org/abs/1807.00734) for more details.
 """
 
+from typing import Tuple
 import tensorflow as tf
 from tensorflow.contrib import gan as tfgan
 
 
 def relativistic_discriminator_loss_impl(
-        discriminator_real_outputs,
-        discriminator_gen_outputs,
+        discriminator_real_outputs: tf.Tensor,
+        discriminator_gen_outputs: tf.Tensor,
         label_smoothing=0.0,
         real_weights=1.0,
         generated_weights=1.0,
@@ -74,9 +75,10 @@ def relativistic_discriminator_loss_impl(
 
     return loss
 
+
 def relativistic_average_discriminator_loss_impl(
-        discriminator_real_outputs,
-        discriminator_gen_outputs,
+        discriminator_real_outputs: tf.Tensor,
+        discriminator_gen_outputs: tf.Tensor,
         label_smoothing=0.0,
         real_weights=1.0,
         generated_weights=1.0,
@@ -116,16 +118,16 @@ def relativistic_average_discriminator_loss_impl(
             discriminator_real_outputs, discriminator_gen_outputs, real_weights,
             generated_weights, label_smoothing)) as scope:
 
+        d_real, d_gen = _relativistic_avg_discriminator_outputs(
+            discriminator_real_outputs, discriminator_gen_outputs,
+            add_summaries=add_summaries)
+
         loss_on_real = tf.losses.sigmoid_cross_entropy(
-            tf.ones_like(discriminator_real_outputs),
-            discriminator_real_outputs -
-            tf.reduce_mean(discriminator_gen_outputs),
+            tf.ones_like(discriminator_real_outputs), d_real,
             real_weights, label_smoothing, scope,
             loss_collection=None, reduction=reduction)
         loss_on_generated = tf.losses.sigmoid_cross_entropy(
-            tf.zeros_like(discriminator_gen_outputs),
-            discriminator_gen_outputs -
-            tf.reduce_mean(discriminator_real_outputs),
+            tf.zeros_like(discriminator_gen_outputs), d_gen,
             generated_weights, scope=scope,
             loss_collection=None, reduction=reduction)
 
@@ -144,7 +146,7 @@ def relativistic_average_discriminator_loss_impl(
 
 
 def relativistic_average_discriminator_loss(
-        gan_model,
+        gan_model: tfgan.GANModel,
         label_smoothing=0.0,
         real_weights=1.0,
         generated_weights=1.0,
@@ -166,8 +168,8 @@ def relativistic_average_discriminator_loss(
 
 
 def relativistic_average_generator_loss_impl(
-        discriminator_real_outputs,
-        discriminator_gen_outputs,
+        discriminator_real_outputs: tf.Tensor,
+        discriminator_gen_outputs: tf.Tensor,
         label_smoothing=0.0,
         real_weights=1.0,
         generated_weights=1.0,
@@ -202,16 +204,17 @@ def relativistic_average_generator_loss_impl(
     """
     with tf.name_scope(scope, 'generator_relativistic_avg_loss',
                        [discriminator_gen_outputs]) as scope:
+
+        (d_real, d_gen) = _relativistic_avg_discriminator_outputs(
+            discriminator_real_outputs, discriminator_gen_outputs,
+            add_summaries=False) # only discriminator needs to know this
+
         loss_on_real = tf.losses.sigmoid_cross_entropy(
-            tf.zeros_like(discriminator_real_outputs),
-            discriminator_real_outputs -
-            tf.reduce_mean(discriminator_gen_outputs),
+            tf.zeros_like(discriminator_real_outputs), d_real,
             real_weights, label_smoothing, scope,
             loss_collection=None, reduction=reduction)
         loss_on_generated = tf.losses.sigmoid_cross_entropy(
-            tf.ones_like(discriminator_gen_outputs),
-            discriminator_gen_outputs -
-            tf.reduce_mean(discriminator_real_outputs),
+            tf.ones_like(discriminator_gen_outputs), d_gen,
             generated_weights, scope=scope,
             loss_collection=None, reduction=reduction)
 
@@ -230,7 +233,7 @@ def relativistic_average_generator_loss_impl(
 
 
 def relativistic_average_generator_loss(
-        gan_model,
+        gan_model: tfgan.GANModel,
         label_smoothing=0.0,
         real_weights=1.0,
         generated_weights=1.0,
@@ -249,3 +252,27 @@ def relativistic_average_generator_loss(
         loss_collection=loss_collection,
         reduction=tf.losses.Reduction.SUM_BY_NONZERO_WEIGHTS,
         add_summaries=add_summaries)
+
+
+def _relativistic_avg_discriminator_outputs(
+        discriminator_real_outputs: tf.Tensor,
+        discriminator_gen_outputs: tf.Tensor,
+        add_summaries: bool = False) -> Tuple[tf.Tensor, tf.Tensor]:
+    """Calculate the relativistic average discriminator outputs for both real and generated data:
+
+        d_real = D(x_r) - mean(D(x_g))
+        d_gen = D(x_g) - mean(D(x_r))
+
+    Returns: (d_real, d_gen)
+    """
+    avg_disc_on_generated = tf.reduce_mean(discriminator_gen_outputs)
+    avg_disc_on_real = tf.reduce_mean(discriminator_real_outputs)
+
+    if add_summaries:
+      tf.summary.scalar("avg_disc_on_generated", avg_disc_on_generated)
+      tf.summary.scalar("avg_disc_on_real", avg_disc_on_real)
+
+    d_real = discriminator_real_outputs - avg_disc_on_generated
+    d_gen = discriminator_gen_outputs - avg_disc_on_real
+
+    return (d_real, d_gen)
