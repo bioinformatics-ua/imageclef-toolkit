@@ -10,4 +10,4 @@ This section contains tools for the concept detection sub-task of ImageCLEF Capt
 
 These tools were originally developed in the scope of the following paper:
 
-> Eduardo Pinho and Carlos Costa. _Feature Learning with Adversarial Networks for Concept Detection in Medical Images: UA.PT Bioinformatics at ImageCLEF 2018_, CLEF working notes, CEUR, 2018.
+> Eduardo Pinho and Carlos Costa. _Feature Learning with Adversarial Networks for Concept Detection in Medical Images: UA.PT Bioinformatics at ImageCLEF 2018_, CLEF working notes, CEUR, 2018. Online: <http://ceur-ws.org/Vol-2125/paper_139.pdf>
