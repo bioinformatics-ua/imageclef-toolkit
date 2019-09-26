@@ -2,10 +2,10 @@
 
 This program merges two or more submission files by concatenating the concepts.
 
-There are two conditions for a proper merge at the moment:
+**There are two conditions for a proper merge at the moment:**
 
 1. The file ids must occur at the exact same order.
-2. The domains concepts of each file are assumed to be exclusive.
+2. The concepts of each file are assumed to be exclusive.
 
 These constraints exists to make the program as simple as it can be to fulfill current use cases.
 

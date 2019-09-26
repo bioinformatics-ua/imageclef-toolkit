@@ -1,8 +1,9 @@
 [package]
 authors = ["Eduardo Pinho <eduardopinho@ua.pt>"]
-name = "merge-submission"
+name = "imageclef-merge-submission"
 publish = false
-version = "0.1.0"
+version = "0.2.0"
+edition = "2018"
 license = "MIT"
 
 [dependencies]

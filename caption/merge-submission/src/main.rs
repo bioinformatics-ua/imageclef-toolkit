@@ -1,22 +1,18 @@
-#[macro_use]
-extern crate quicli;
-
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
+use quicli::main;
 use quicli::prelude::*;
 
+/// Merge multiple ImageCLEF 2018 concept detection submission files into one
 #[derive(Debug, StructOpt)]
-#[structopt(
-    name = "merge-submission",
-    about = "Merge multiple ImageCLEF 2018 concept detection submission files into one"
-)]
 struct Cli {
-    #[structopt(help = "The submission files to merge")]
+    /// The submission files to merge
     #[structopt(raw(required = "true"))]
     file: Vec<String>,
-    #[structopt(short = "d", long = "delimiter", default_value = ";", help = "The concept delimiter")]
+    /// The concept delimiter
+    #[structopt(short = "d", long = "delimiter", default_value = ";")]
     delimiter: String,
 }
 
