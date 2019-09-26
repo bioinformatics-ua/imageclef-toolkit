@@ -43,7 +43,7 @@ def build_faae_harness(image_input: tf.Tensor,
         check_shapes=True)  # set to False for 2-level architectures
 
     sampled_x = gan_model.generated_data
-    image_grid_summary(sampled_x, grid_size=3, name='generated_data')
+    image_grid_summary(sampled_x, grid_size=2, name='generated_data')
     if summarize_activations:
         tf.contrib.layers.summarize_activations()
     tf.contrib.layers.summarize_collection(tf.GraphKeys.TRAINABLE_VARIABLES)

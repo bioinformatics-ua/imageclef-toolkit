@@ -107,7 +107,7 @@ def build_aae_harness(image_input: tf.Tensor,
         check_shapes=True)  # must be false when passing tuples/lists of tensors
 
     image_grid_summary(gan_model.encoder_gen_outputs,
-                       grid_size=3, name='generated_data')
+                       grid_size=2, name='generated_data')
     if summarize_activations:
         tf.contrib.layers.summarize_activations()
     tf.contrib.layers.summarize_collection(tf.GraphKeys.TRAINABLE_VARIABLES)

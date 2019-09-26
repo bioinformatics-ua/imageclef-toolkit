@@ -92,15 +92,15 @@ class ResTransposeBlock(tf.keras.Model):
 class ResGanGenerator(tf.keras.Model):
     """ResNet19 generator"""
 
-    def __init__(self, channels_out: int = N_CHANNELS, nlevels: int = 4,
+    def __init__(self, channels_out: int = N_CHANNELS, nlevels: int = 4, bottom_res: int = 4, bottom_nb: int = 512,
                  fc_activation='relu', conv_activation='relu', last_activation='tanh',
                  batch_norm: bool = True):
         super(ResGanGenerator, self).__init__()
-        self.fc0 = tf.keras.layers.Dense(512 * 4 * 4, activation=fc_activation)
-        self.fc_reshape = tf.keras.layers.Reshape((4, 4, 512))
+        self.fc0 = tf.keras.layers.Dense(bottom_nb * bottom_res * bottom_res, activation=fc_activation)
+        self.fc_reshape = tf.keras.layers.Reshape((bottom_res, bottom_res, bottom_nb))
         self.blocks = [
             ResTransposeBlock(
-                512 >> (i // 2), activation=conv_activation, batch_norm=batch_norm)
+                bottom_nb >> (i // 2), activation=conv_activation, batch_norm=batch_norm)
             for i in range(1, nlevels + 1)
         ]
         self.bn_last = keras.layers.BatchNormalization() if batch_norm else None

@@ -9,7 +9,7 @@ fully_connected = tf.contrib.layers.fully_connected
 variance_scaling_initializer = tf.contrib.layers.variance_scaling_initializer
 arg_scope = tf.contrib.framework.arg_scope
 
-N_CHANNELS = 1
+N_CHANNELS = 3
 
 
 def conv_t_block(incoming: tf.Tensor, nb: int, ks: int = 3, spectral_norm: bool = False):
@@ -84,7 +84,9 @@ def build_dcgan_generator(z: tf.Tensor, nchannels: int = N_CHANNELS, nlevels: in
     return net
 
 
-def build_sndcgan_generator(z: tf.Tensor, nchannels: int = N_CHANNELS, nlevels: int = 4, conv_activation_fn=tf.nn.relu,
+def build_sndcgan_generator(z: tf.Tensor, nchannels: int = N_CHANNELS, nlevels: int = 4,
+                            bottom_res: int = 4, bottom_nb: int = 512,
+                            conv_activation_fn=tf.nn.relu,
                             batch_norm: bool = True, add_summaries=False, mode=None):
     """Build a generator based on SNDCGAN, presented in:
         Miyato et al. Spectral Normalization for generative adversarial networks (2018)
@@ -117,18 +119,16 @@ def build_sndcgan_generator(z: tf.Tensor, nchannels: int = N_CHANNELS, nlevels: 
     with arg_scope([fully_connected, conv2d, conv2d_t], outputs_collections=[tf.GraphKeys.ACTIVATIONS],
                    variables_collections=[tf.GraphKeys.TRAINABLE_VARIABLES],
                    weights_initializer=tf.random_normal_initializer(stddev=0.02)):
-        # use leaky ReLU and pixelwise norm on all conv layers (except the head)
         with arg_scope([conv2d, conv2d_t], activation_fn=conv_activation_fn,
                        normalizer_fn=normalizer_fn, normalizer_params=normalizer_params):
             net = fully_connected(
-                net, 512 * 4 * 4, activation_fn=None)
-            net = tf.reshape(net, [-1, 4, 4, 512])  # Bx4x4x512
-            nb = 512
+                net, bottom_nb * bottom_res * bottom_res, activation_fn=None)
+            net = tf.reshape(net, [-1, bottom_res, bottom_res, bottom_nb])  # Bx4x4x512
+            nb = bottom_nb
             for _ in range(nlevels):
                 net = conv2d_t(net, nb, 4, 2)
                 nb = nb // 2
-        net = conv2d(net, nchannels, 3, 1,
-                     activation_fn=tf.nn.tanh, scope="y")
+        net = conv2d(net, nchannels, 3, 1, activation_fn=tf.nn.tanh, scope="y")
     assert len(net.shape.as_list()) == 4
     return net
 
@@ -136,18 +136,22 @@ def build_sndcgan_generator(z: tf.Tensor, nchannels: int = N_CHANNELS, nlevels: 
 class SNDCGANGenerator(tf.keras.Model):
 
     def __init__(self, nchannels: int = N_CHANNELS, nlevels: int = 4,
+                 bottom_res: int = 4, bottom_nb: int = 512,
                  conv_activation=tf.nn.relu, batch_norm: bool = True):
         tf.keras.Model.__init__(self)
         self.nchannels = nchannels
         self.nlevels = nlevels
         self.conv_activation = conv_activation
         self.batch_norm = batch_norm
+        self.bottom_res = bottom_res
+        self.bottom_nb = bottom_nb
     
     def call(self, inputs, training):
         if isinstance(inputs, list):
             inputs = inputs[0]
         return build_sndcgan_generator(
-            inputs, self.nchannels, self.nlevels, conv_activation_fn=self.conv_activation,
+            inputs, self.nchannels, self.nlevels, bottom_res=self.bottom_res,
+            bottom_nb=self.bottom_nb, conv_activation_fn=self.conv_activation,
             batch_norm=self.batch_norm, mode='TRAIN' if training else 'PREDICT')
 
 

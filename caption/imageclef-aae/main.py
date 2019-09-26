@@ -8,14 +8,16 @@ from tensorflow.python import debug as tf_debug  # pylint: disable=E0611
 from tensorflow import saved_model
 from tensorflow.contrib import gan as tfgan
 from dataset_imagedir import get_dataset_dir
-from util import image_summaries_generated, image_grid_summary, random_noise, DynamicGANTrainHook
+from util import image_summaries_generated, image_grid_summary, random_noise
+from ae import SNDCGANGenerator
 #from ae import build_dcgan_generator, build_sndcgan_generator, build_sndcgan_encoder, build_encoder, build_1lvl_generator, build_dcgan_generator
-from ae_res import ResGanDiscriminator, ResGanEncoder, ResGanGenerator
+#from ae_res import ResGanDiscriminator
 from faae import build_faae_harness
 from aae import build_code_discriminator, build_aae_harness, CodeDiscriminator
 from aae_train import aegan_model, aegan_train_ops
 from plain_gan import build_gan_harness, build_sndcgan_discriminator
 from AMSGrad import AMSGrad
+import efficientnet
 
 tf.logging.set_verbosity(tf.logging.INFO)
 
@@ -33,7 +35,7 @@ LOSS_TYPE_SUFFIX = {
 FEATURE_MATCHING = False
 FM_SUFFIX = "_FM" if FEATURE_MATCHING else ""
 # The run key to be used
-KEY = "{}{}_2019{}_64px_RUN1".format(TYPE, LOSS_TYPE_SUFFIX, FM_SUFFIX)
+KEY = "{}{}_eff-b1_112px_RUN2".format(TYPE, LOSS_TYPE_SUFFIX)
 # Training data set dir
 DATA_DIR = "data/training-set-small"
 # Testing data set dir
@@ -61,7 +63,7 @@ NOISE_DIMS = 1024
 # The random distribution of the prior code (choices: "SPHERE", "UNIFORM", "NORMAL", "RECTIFIED_NORMAL", "CENTERED_BERNOULLI")
 NOISE_FORMAT = "RECTIFIED_NORMAL"
 # The real/generated image size in pixels
-IMAGE_SIZE = 64
+IMAGE_SIZE = 112
 # The extra margin to consider in random cropping: image will be first
 # resized to the size `IMAGE_SIZE + CROP_MARGIN_SIZE` 
 CROP_MARGIN_SIZE = 8
@@ -72,7 +74,7 @@ N_CHANNELS = 3
 # (should be updated based on batch size and training set size)
 STEPS_PER_EPOCH = 56629 // BATCH_SIZE
 # Number of epochs to train
-NUM_EPOCHS = 25
+NUM_EPOCHS = 35
 # Total number of steps to train
 NUM_STEPS = STEPS_PER_EPOCH * NUM_EPOCHS
 # Number of reconstruction steps per iteration
@@ -95,25 +97,46 @@ NUM_NETWORK_LEVELS = {
     16: 2,
     32: 3,
     64: 4,
+    112: 4,
     128: 5,
+    224: 5,
     256: 6,
     512: 7,
     1024: 8
 }[IMAGE_SIZE]
 
+EFFICIENT_NET = 'efficientnet-b1'
+
 # These constants point to network building functions with a custom prototype.
 # More functions which can be assigned here are available in the modules `ae.py`, `ae_res.py`, `aae.py` and `plain_gan.py`.
-GENERATOR_FN = ResGanGenerator(channels_out=N_CHANNELS, nlevels=NUM_NETWORK_LEVELS)
+GENERATOR_FN = SNDCGANGenerator(nlevels=NUM_NETWORK_LEVELS, bottom_res=7 if IMAGE_SIZE == 112 else 4)
 DISCRIMINATOR_FN = CodeDiscriminator()
-ENCODER_FN = ResGanEncoder(
-    channels_out=NOISE_DIMS, nlevels=NUM_NETWORK_LEVELS,
-    last_activation='relu' if NOISE_FORMAT == 'RECTIFIED_NORMAL'
-    else 'tanh' if NOISE_FORMAT == 'CENTERED_BERNOULLI' or NOISE_FORMAT == 'UNIFORM'
-    else None,
-    act_regularizer=tf.keras.regularizers.l1(2e-7) if (
-        NOISE_FORMAT in ['NORMAL', 'RECTIFIED_NORMAL'] and
-        G_STEPS == 0)
-    else None)
+
+def make_efficientnet_encoder(name):
+    w_coeff, d_coeff, res, dropout_rate = efficientnet.efficientnet_builder.efficientnet_params(name)
+    efficientnet_block_args, efficientnet_global_args = efficientnet.efficientnet_builder.efficientnet(
+        w_coeff, d_coeff, dropout_rate, num_classes=NOISE_DIMS)
+
+    if res != IMAGE_SIZE:
+        print("WARNING: image resolution should be {}, but IMAGE_SIZE is {}; this can break".format(res, IMAGE_SIZE))
+
+    last_activation = tf.nn.relu if NOISE_FORMAT == 'RECTIFIED_NORMAL' \
+        else tf.nn.tanh if NOISE_FORMAT == 'CENTERED_BERNOULLI' or NOISE_FORMAT == 'UNIFORM' \
+        else None
+
+    return efficientnet.efficientnet_model.Model(
+        efficientnet_block_args, efficientnet_global_args,
+        last_fn=last_activation)
+
+
+ENCODER_FN = make_efficientnet_encoder(EFFICIENT_NET)
+
+#    channels_out=NOISE_DIMS, nlevels=NUM_NETWORK_LEVELS,
+
+#    act_regularizer=tf.keras.regularizers.l1(2e-7) if (
+#        NOISE_FORMAT in ['NORMAL', 'RECTIFIED_NORMAL'] and
+#        G_STEPS == 0)
+#    else None)
 
 # -----------------------------------------------------------------
 
@@ -146,8 +169,7 @@ def save(export_dir=None, generator_scope=None, encoder_scope=None):
             with encoder_scope:
                 x_input = tf.placeholder(
                     tf.float32, shape=[None, IMAGE_SIZE, IMAGE_SIZE, N_CHANNELS])
-                encoded_z = ENCODER_FN(
-                    [x_input], training=False)
+                encoded_z = ENCODER_FN([x_input], training=False)
             encode_signature_inputs = {
                 "x": saved_model.utils.build_tensor_info(x_input)
             }
@@ -300,15 +322,6 @@ if DO_TRAIN:
 
     r_steps = 0 if TYPE == "GAN" else R_STEPS
 
-    def get_dynamic_train_hooks(handicaps, emergency_thresholds):
-        def get_hooks(train_ops):
-            return [DynamicGANTrainHook(
-                train.global_step_inc_op,
-                [train.discriminator_train_op, train.generator_train_op],
-                [loss.discriminator_loss, loss.generator_loss],
-                handicaps,
-                emergency_thresholds)]
-        return get_hooks
 
     def get_sequential_train_hooks(rec_steps: int = 1, disc_steps: int = 1, gen_steps: int = 1):
         """Returns a hooks function for sequential auto-encoding GAN training.
